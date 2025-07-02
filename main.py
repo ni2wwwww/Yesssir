@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 # It's highly recommended to use environment variables for tokens in production.
-TELEGRAM_BOT_TOKEN = "7615802418:AAGKxCpVrDVGFbyd3aQi0_9G9CHGcJMCLEY" # Replace with your actual token
+TELEGRAM_BOT_TOKEN = "7248159727:AAEzc2CNStU6H8F3zD4Y5CFIYRSkyhO_TiQ" # Replace with your actual token
 CHECKER_API_URL = "https://sigmabro766.onrender.com/"
 BINLIST_API_URL = "https://lookup.binlist.net/"
 
