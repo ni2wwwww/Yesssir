@@ -31,22 +31,10 @@ TELEGRAM_BOT_TOKEN = "7615802418:AAGKxCpVrDVGFbyd3aQi0_9G9CHGcJMCLEY" # Replace 
 CHECKER_API_URL = "https://sigmabro766.onrender.com/"
 BINLIST_API_URL = "https://lookup.binlist.net/"
 
-# Premium Proxy List
+# Premium Proxy List (IP-based proxies removed as requested)
 PROXY_LIST = [
     "http://PP_2MX8KKO81J:soyjpcgu_country-us@ps-pro.porterproxies.com:31112",
     "http://In2nyCyUORV4KYeI:yXhbVJozQeBVVRnM@geo.g-w.info:10080",
-    *[f"http://{p.split(':')[2]}:{p.split(':')[3]}@{p.split(':')[0]}:{p.split(':')[1]}" for p in [
-        "38.154.227.167:5868:dmeigyzw:5ece3v7xz8d2",
-        "198.23.239.134:6540:dmeigyzw:5ece3v7xz8d2",
-        "207.244.217.165:6712:dmeigyzw:5ece3v7xz8d2",
-        "107.172.163.27:6543:dmeigyzw:5ece3v7xz8d2",
-        "216.10.27.159:6837:dmeigyzw:5ece3v7xz8d2",
-        "142.147.128.93:6593:dmeigyzw:5ece3v7xz8d2",
-        "64.64.118.149:6732:dmeigyzw:5ece3v7xz8d2",
-        "136.0.207.84:6661:dmeigyzw:5ece3v7xz8d2",
-        "206.41.172.74:6634:dmeigyzw:5ece3v7xz8d2",
-        "104.239.105.125:6655:dmeigyzw:5ece3v7xz8d2",
-    ]]
 ]
 
 COMMON_HTTP_HEADERS = {
@@ -107,16 +95,23 @@ async def get_bin_details(bin_number):
         }
 
     proxy = random.choice(PROXY_LIST) if PROXY_LIST else None
-    proxies = proxy if proxy else None # Correctly define proxies
+    proxies = proxy if proxy else None
     proxy_host = proxy.split('@')[-1].split(':')[0] if proxy else "Direct"
 
     try:
         headers = {'Accept-Version': '3', **COMMON_HTTP_HEADERS}
-        async with httpx.AsyncClient(proxies=proxies, timeout=15.0) as client: # Use proxies parameter
+        async with httpx.AsyncClient(proxies=proxies, timeout=15.0) as client:
             response = await client.get(f"{BINLIST_API_URL}{bin_number}", headers=headers)
 
             if response.status_code == 200:
-                data = response.json()
+                # FIX: Manually decode the response to prevent encoding errors
+                try:
+                    decoded_content = response.content.decode('utf-8')
+                except UnicodeDecodeError:
+                    # Fallback to a different encoding if utf-8 fails
+                    decoded_content = response.content.decode('latin-1', errors='replace')
+
+                data = json.loads(decoded_content)
                 return {
                     "bin": bin_number,
                     "scheme": data.get("scheme", "N/A").upper(),
@@ -126,6 +121,8 @@ async def get_bin_details(bin_number):
                     "country_name": data.get("country", {}).get("name", "N/A"),
                     "country_emoji": data.get("country", {}).get("emoji", "🌐")
                 }
+            
+            # Handle non-200 responses
             return {
                 "bin": bin_number,
                 "scheme": "N/A", "type": "N/A", "brand": "N/A",
@@ -140,6 +137,7 @@ async def get_bin_details(bin_number):
             "bank_name": "N/A", "country_name": "N/A", "country_emoji": "🌐",
             "error": "Lookup failed"
         }
+
 
 # --- Stylish Message Templates ---
 def generate_header(title):
@@ -304,11 +302,11 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     params = {"site": shopify_site, "cc": cc_details_full}
     proxy = random.choice(PROXY_LIST) if PROXY_LIST else None
-    proxies = proxy if proxy else None # Corrected proxy handling
+    proxies = proxy if proxy else None
     proxy_host = proxy.split('@')[-1].split(':')[0] if proxy else "Direct"
 
     try:
-        async with httpx.AsyncClient(headers=COMMON_HTTP_HEADERS, proxies=proxies, timeout=45.0) as client: # Use proxies parameter
+        async with httpx.AsyncClient(headers=COMMON_HTTP_HEADERS, proxies=proxies, timeout=45.0) as client:
             response = await client.get(CHECKER_API_URL, params=params)
 
         api_data = parse_checker_api_response(response.text)
@@ -423,7 +421,7 @@ async def mchk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 params = {"site": shopify_site, "cc": card}
                 proxy = random.choice(PROXY_LIST) if PROXY_LIST else None
-                proxies = proxy if proxy else None # Corrected proxy handling
+                proxies = proxy if proxy else None
 
                 async with httpx.AsyncClient(headers=COMMON_HTTP_HEADERS, proxies=proxies, timeout=30.0) as client:
                     response = await client.get(CHECKER_API_URL, params=params)
