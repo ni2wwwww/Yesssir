@@ -43,11 +43,16 @@ CHECKER_API_URL = "https://sigmabro766-1.onrender.com"
 BINLIST_API_URL = "https://lookup.binlist.net/"
 
 # Admin configuration (Add your Telegram user IDs here)
-ADMIN_IDS = [7675426356, 987654321]  # Replace with actual admin Telegram IDs
+ADMIN_IDS = [123456789, 987654321]  # Replace with actual admin Telegram IDs
 
 # Premium headers
 COMMON_HTTP_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 
@@ -176,12 +181,15 @@ class PremiumUI:
             "TIMEOUT": "⏱️"
         }.get(result.status, "🟡")
 
+        # Mask the card number for display
+        masked_card = result.card_number[:6] + "**" + result.card_number[-4:] if len(result.card_number) > 10 else result.card_number
+
         return f"""<b>{PremiumUI.create_header("PREMIUM CHECK RESULT")}</b>
 
-💳 <b>Card:</b> <code>{html.escape(result.card_number)}</code>
+💳 <b>Card:</b> <code>{html.escape(masked_card)}</code>
 🌐 <b>Site:</b> <pre>{html.escape(result.site_url)}</pre>
 {status_emoji} <b>Status:</b> {html.escape(result.status)}
-🗣️ <b>Response:</b> <pre>{html.escape(result.response[:100])}</pre>
+🗣️ <b>Response:</b> <pre>{html.escape(result.response[:150])}</pre>
 
 <pre>─ ─ ─ BIN INFO ─ ─ ─</pre>
 <b>BIN:</b> <code>{result.bin_info.get('bin', 'N/A')}</code>
@@ -351,7 +359,7 @@ class DataManager:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 🚀 PREMIUM API SERVICE
+# 🚀 PREMIUM API SERVICE - FIXED VERSION
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class APIService:
@@ -361,7 +369,12 @@ class APIService:
     async def get_session(self) -> httpx.AsyncClient:
         """Get or create HTTP session"""
         if self.session is None:
-            self.session = httpx.AsyncClient(headers=COMMON_HTTP_HEADERS, timeout=45.0)
+            self.session = httpx.AsyncClient(
+                headers=COMMON_HTTP_HEADERS, 
+                timeout=httpx.Timeout(60.0, connect=10.0),  # Increased timeout
+                follow_redirects=True,
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+            )
         return self.session
 
     async def get_bin_details(self, bin_number: str) -> Dict[str, Any]:
@@ -374,7 +387,8 @@ class APIService:
 
         try:
             session = await self.get_session()
-            response = await session.get(f"{BINLIST_API_URL}{bin_number}")
+            headers = {'Accept-Version': '3', **COMMON_HTTP_HEADERS}
+            response = await session.get(f"{BINLIST_API_URL}{bin_number}", headers=headers)
             
             if response.status_code == 200:
                 data = response.json()
@@ -388,51 +402,110 @@ class APIService:
                     "country_emoji": data.get("country", {}).get("emoji", "🏳️")
                 }
             else:
-                return {"error": f"BIN lookup failed ({response.status_code})", "bin": bin_number}
+                return {
+                    "error": f"BIN lookup failed ({response.status_code})", 
+                    "bin": bin_number, "scheme": "N/A", "type": "N/A",
+                    "brand": "N/A", "bank_name": "N/A", "country_name": "N/A", "country_emoji": "🏳️"
+                }
         except Exception as e:
             logger.exception(f"Error fetching BIN details for {bin_number}")
-            return {"error": "Lookup failed", "bin": bin_number}
+            return {
+                "error": "Lookup failed", "bin": bin_number, "scheme": "N/A", "type": "N/A",
+                "brand": "N/A", "bank_name": "N/A", "country_name": "N/A", "country_emoji": "🏳️"
+            }
 
     def parse_checker_response(self, response_text: str) -> Dict[str, Any]:
-        """Parse checker API response with fallback"""
+        """Parse checker API response with improved fallback"""
         if not response_text:
             return {"Response": "Empty response", "Gateway": "N/A", "Price": "0.00"}
 
+        # First try to find JSON
         json_start = response_text.find('{')
-        if json_start == -1:
-            return {"Response": response_text[:100], "Gateway": "N/A", "Price": "0.00"}
+        if json_start != -1:
+            try:
+                return json.loads(response_text[json_start:])
+            except json.JSONDecodeError:
+                pass
 
-        try:
-            return json.loads(response_text[json_start:])
-        except json.JSONDecodeError:
-            return {"Response": response_text[:100], "Gateway": "N/A", "Price": "0.00"}
+        # If no JSON found, try to parse as plain text response
+        response_text = response_text.strip()
+        
+        # Check for common response patterns
+        if "CARD_DECLINED" in response_text.upper():
+            return {"Response": "CARD_DECLINED", "Gateway": "Shopify", "Price": "0.00"}
+        elif "THANK YOU" in response_text.upper() or "ORDER_PLACED" in response_text.upper():
+            return {"Response": "ORDER_PLACED", "Gateway": "Shopify", "Price": "0.00"}
+        elif "INSUFFICIENT_FUNDS" in response_text.upper():
+            return {"Response": "INSUFFICIENT_FUNDS", "Gateway": "Shopify", "Price": "0.00"}
+        elif "INCORRECT_CVC" in response_text.upper():
+            return {"Response": "INCORRECT_CVC", "Gateway": "Shopify", "Price": "0.00"}
+        else:
+            return {"Response": response_text[:200], "Gateway": "Unknown", "Price": "0.00"}
 
     async def check_card(self, site_url: str, card_details: str) -> Dict[str, Any]:
-        """Check card with premium error handling"""
+        """Check card with improved error handling and debugging"""
         try:
             session = await self.get_session()
-            params = {"site": site_url, "cc": card_details}
-            response = await session.get(CHECKER_API_URL, params=params)
+            
+            # Construct the exact URL as shown in your example
+            url = f"{CHECKER_API_URL}/?site={site_url}&cc={card_details}"
+            
+            logger.info(f"Making request to: {url}")
+            
+            # Make the request with proper parameters
+            response = await session.get(
+                CHECKER_API_URL,
+                params={"site": site_url, "cc": card_details}
+            )
+            
+            logger.info(f"Response status: {response.status_code}")
+            logger.info(f"Response headers: {dict(response.headers)}")
+            logger.info(f"Response text (first 500 chars): {response.text[:500]}")
             
             if response.status_code == 200:
                 return self.parse_checker_response(response.text)
             else:
+                error_msg = f"API Error ({response.status_code})"
+                if response.text:
+                    error_msg += f": {response.text[:100]}"
+                
                 return {
-                    "Response": f"API Error ({response.status_code})",
+                    "Response": error_msg,
                     "Gateway": "N/A",
                     "Price": "0.00"
                 }
-        except Exception as e:
-            logger.exception(f"Error checking card: {card_details[:6]}***")
+                
+        except httpx.TimeoutException:
+            logger.error(f"Timeout checking card: {card_details[:6]}***")
             return {
-                "Response": f"Network Error: {str(e)[:50]}",
+                "Response": "Request timeout - API took too long to respond",
+                "Gateway": "N/A", 
+                "Price": "0.00"
+            }
+        except httpx.ConnectError as e:
+            logger.error(f"Connection error: {str(e)}")
+            return {
+                "Response": f"Connection failed: Cannot reach API server",
+                "Gateway": "N/A", 
+                "Price": "0.00"
+            }
+        except Exception as e:
+            logger.exception(f"Unexpected error checking card: {card_details[:6]}***")
+            return {
+                "Response": f"System Error: {str(e)[:100]}",
                 "Gateway": "N/A", 
                 "Price": "0.00"
             }
 
+    async def close_session(self):
+        """Close the HTTP session"""
+        if self.session:
+            await self.session.aclose()
+            self.session = None
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 👑 PREMIUM BOT CLASS
+# 👑 PREMIUM BOT CLASS - UPDATED
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class PremiumBot:
@@ -539,7 +612,7 @@ Welcome back, <b>{html.escape(profile.username)}</b> {profile.membership_emoji}
             )
 
     async def check_single_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Premium single card check"""
+        """Premium single card check with improved API handling"""
         user = update.effective_user
         profile = self.data_manager.get_user(user.id, user.username or user.first_name)
 
@@ -568,7 +641,7 @@ Welcome back, <b>{html.escape(profile.username)}</b> {profile.membership_emoji}
         # Show premium loading animation
         spinner_msg = await self.send_premium_spinner(
             context, update.effective_chat.id, profile.membership, 
-            f"Checking <code>{html.escape(card_details[:6])}***</code>"
+            f"🔍 Checking <code>{html.escape(card_details[:6])}***</code>"
         )
 
         start_time = time.time()
@@ -577,8 +650,8 @@ Welcome back, <b>{html.escape(profile.username)}</b> {profile.membership_emoji}
         animation_task = asyncio.create_task(
             self.animate_spinner(
                 context, spinner_msg, profile.membership,
-                f"Checking <code>{html.escape(card_details[:6])}***</code>",
-                profile.processing_delay + 1.0
+                f"🔍 Processing <code>{html.escape(card_details[:6])}***</code>",
+                profile.processing_delay + 2.0
             )
         )
 
@@ -586,8 +659,17 @@ Welcome back, <b>{html.escape(profile.username)}</b> {profile.membership_emoji}
         await asyncio.sleep(profile.processing_delay)
 
         # Get BIN info and check card
-        bin_info = await self.api_service.get_bin_details(card_details.split('|')[0][:6])
-        api_result = await self.api_service.check_card(profile.current_site, card_details)
+        try:
+            bin_info = await self.api_service.get_bin_details(card_details.split('|')[0][:6])
+            api_result = await self.api_service.check_card(profile.current_site, card_details)
+        except Exception as e:
+            logger.exception(f"Error during check for user {user.id}")
+            api_result = {
+                "Response": f"System Error: {str(e)[:50]}",
+                "Gateway": "N/A",
+                "Price": "0.00"
+            }
+            bin_info = {"error": "System Error", "bin": card_details[:6]}
 
         # Cancel animation
         animation_task.cancel()
@@ -595,14 +677,17 @@ Welcome back, <b>{html.escape(profile.username)}</b> {profile.membership_emoji}
 
         processing_time = time.time() - start_time
 
-        # Determine status
+        # Determine status based on response
         response_text = api_result.get("Response", "Unknown")
-        if response_text == "CARD_DECLINED":
+        if "CARD_DECLINED" in response_text.upper():
             status = "DECLINED"
             profile.failed_checks += 1
-        elif "Thank You" in response_text or "ORDER_PLACED" in response_text.upper():
+        elif any(keyword in response_text.upper() for keyword in ["THANK YOU", "ORDER_PLACED", "SUCCESS"]):
             status = "APPROVED"
             profile.successful_checks += 1
+        elif any(keyword in response_text.upper() for keyword in ["INSUFFICIENT_FUNDS", "INCORRECT_CVC"]):
+            status = "DECLINED"
+            profile.failed_checks += 1
         else:
             status = "ERROR"
 
@@ -980,7 +1065,18 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.callback_handler))
 
     logger.info("🚀 Premium Bot is now running!")
-    application.run_polling()
+    
+    try:
+        application.run_polling()
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    finally:
+        # Clean up
+        import asyncio
+        try:
+            asyncio.run(bot.api_service.close_session())
+        except:
+            pass
 
 
 if __name__ == "__main__":
