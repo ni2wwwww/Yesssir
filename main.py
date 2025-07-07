@@ -22,7 +22,11 @@ from telegram.constants import ParseMode, ChatAction
 # 🎯 CORE CONFIGURATION & SETUP
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Premium logging setup
+# Create directories FIRST, before logging setup
+Path("data").mkdir(exist_ok=True)
+Path("logs").mkdir(exist_ok=True)
+
+# Premium logging setup (AFTER directory creation)
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -45,10 +49,6 @@ ADMIN_IDS = [7675426356, 987654321]  # Replace with actual admin Telegram IDs
 COMMON_HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 }
-
-# Data directories
-Path("data").mkdir(exist_ok=True)
-Path("logs").mkdir(exist_ok=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -272,6 +272,7 @@ class DataManager:
                     json.dump(key_data, f, indent=2, ensure_ascii=False)
                 os.replace("data/license_keys.json.tmp", "data/license_keys.json")
 
+                logger.info("Data saved successfully")
             except Exception as e:
                 logger.error(f"Error saving data: {e}")
 
