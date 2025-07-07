@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 TELEGRAM_BOT_TOKEN = "7615802418:AAGKxCpVrDVGFbyd3aQi0_9G9CHGcJMCLEY" # Replace with your actual token
-CHECKER_API_URL = "https://sigmabro766.onrender.com/"
+CHECKER_API_URL = "https://sigmabro766-1.onrender.com"
 BINLIST_API_URL = "https://lookup.binlist.net/"
 
 COMMON_HTTP_HEADERS = {
