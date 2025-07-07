@@ -7,6 +7,7 @@ import time
 import html
 import secrets
 import threading
+import re
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict, field
 from enum import Enum
@@ -43,7 +44,7 @@ CHECKER_API_URL = "https://sigmabro766-1.onrender.com"
 BINLIST_API_URL = "https://lookup.binlist.net/"
 
 # Admin configuration (Add your Telegram user IDs here)
-ADMIN_IDS = [7675426356, 987654321]  # Replace with actual admin Telegram IDs
+ADMIN_IDS = [123456789, 987654321]  # Replace with actual admin Telegram IDs
 
 # Premium headers
 COMMON_HTTP_HEADERS = {
@@ -117,6 +118,8 @@ class CheckResult:
     user_id: int
     processing_time: float
     bin_info: Dict[str, Any]
+    gateway: str = "Unknown"
+    price: str = "0.00"
 
 @dataclass
 class LicenseKey:
@@ -176,18 +179,28 @@ class PremiumUI:
         """Format a premium check result"""
         status_emoji = {
             "APPROVED": "🟢",
+            "CHARGED": "💎",
             "DECLINED": "🔴", 
             "ERROR": "🟡",
             "TIMEOUT": "⏱️"
         }.get(result.status, "🟡")
 
         # Mask the card number for display
-        masked_card = result.card_number[:6] + "**" + result.card_number[-4:] if len(result.card_number) > 10 else result.card_number
+        try:
+            parts = result.card_number.split('|')
+            if len(parts) >= 1:
+                card_num = parts[0]
+                masked_card = f"{card_num[:6]}{'*' * (len(card_num) - 10)}{card_num[-4:]}" if len(card_num) > 10 else result.card_number
+            else:
+                masked_card = result.card_number
+        except:
+            masked_card = result.card_number
 
-        return f"""<b>{PremiumUI.create_header("PREMIUM CHECK RESULT")}</b>
+        return f"""<pre>{PremiumUI.create_header("PREMIUM CHECK RESULT")}</pre>
 
 💳 <b>Card:</b> <code>{html.escape(masked_card)}</code>
 🌐 <b>Site:</b> <pre>{html.escape(result.site_url)}</pre>
+⚙️ <b>Gateway:</b> {html.escape(result.gateway)} (${html.escape(result.price)})
 {status_emoji} <b>Status:</b> {html.escape(result.status)}
 🗣️ <b>Response:</b> <pre>{html.escape(result.response[:150])}</pre>
 
@@ -359,7 +372,7 @@ class DataManager:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 🚀 PREMIUM API SERVICE - FIXED VERSION
+# 🚀 PREMIUM API SERVICE - FIXED FOR LONG RESPONSES
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class APIService:
@@ -367,11 +380,11 @@ class APIService:
         self.session = None
 
     async def get_session(self) -> httpx.AsyncClient:
-        """Get or create HTTP session"""
+        """Get or create HTTP session with extended timeout"""
         if self.session is None:
             self.session = httpx.AsyncClient(
                 headers=COMMON_HTTP_HEADERS, 
-                timeout=httpx.Timeout(60.0, connect=10.0),  # Increased timeout
+                timeout=httpx.Timeout(120.0, connect=15.0),  # Extended timeout for slow API
                 follow_redirects=True,
                 limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
             )
@@ -415,35 +428,70 @@ class APIService:
             }
 
     def parse_checker_response(self, response_text: str) -> Dict[str, Any]:
-        """Parse checker API response with improved fallback"""
+        """Parse checker API response handling PHP warnings and mixed content"""
         if not response_text:
             return {"Response": "Empty response", "Gateway": "N/A", "Price": "0.00"}
 
-        # First try to find JSON
-        json_start = response_text.find('{')
+        # Clean the response by removing PHP warnings/deprecation notices
+        cleaned_response = response_text
+        
+        # Remove PHP deprecation warnings
+        deprecation_patterns = [
+            r'Deprecated:.*?in /var/www/html/index\.php on line \d+\s*',
+            r'Warning:.*?in /var/www/html/index\.php on line \d+\s*',
+            r'Notice:.*?in /var/www/html/index\.php on line \d+\s*'
+        ]
+        
+        for pattern in deprecation_patterns:
+            cleaned_response = re.sub(pattern, '', cleaned_response, flags=re.MULTILINE | re.DOTALL)
+        
+        # Remove extra whitespace and newlines
+        cleaned_response = cleaned_response.strip()
+        
+        logger.info(f"Original response length: {len(response_text)}")
+        logger.info(f"Cleaned response: {cleaned_response}")
+        
+        # Try to find JSON in the cleaned response
+        json_start = cleaned_response.find('{')
         if json_start != -1:
+            json_part = cleaned_response[json_start:]
+            json_end = json_part.rfind('}') + 1
+            if json_end > 0:
+                json_part = json_part[:json_end]
+                try:
+                    data = json.loads(json_part)
+                    logger.info(f"Successfully parsed JSON: {data}")
+                    return data
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON decode error: {e}")
+                    logger.error(f"Trying to parse: {json_part[:200]}")
+
+        # If JSON parsing fails, try to extract from the original response
+        # Look for the JSON pattern at the end
+        json_match = re.search(r'\{[^{}]*"Response"[^{}]*\}', response_text)
+        if json_match:
             try:
-                return json.loads(response_text[json_start:])
+                data = json.loads(json_match.group())
+                logger.info(f"Found JSON with regex: {data}")
+                return data
             except json.JSONDecodeError:
                 pass
 
-        # If no JSON found, try to parse as plain text response
-        response_text = response_text.strip()
-        
-        # Check for common response patterns
-        if "CARD_DECLINED" in response_text.upper():
+        # Fallback: analyze the text for known patterns
+        response_upper = response_text.upper()
+        if "CARD_DECLINED" in response_upper:
             return {"Response": "CARD_DECLINED", "Gateway": "Shopify", "Price": "0.00"}
-        elif "THANK YOU" in response_text.upper() or "ORDER_PLACED" in response_text.upper():
+        elif any(phrase in response_upper for phrase in ["THANK YOU", "ORDER_PLACED", "SUCCESS"]):
             return {"Response": "ORDER_PLACED", "Gateway": "Shopify", "Price": "0.00"}
-        elif "INSUFFICIENT_FUNDS" in response_text.upper():
+        elif "INSUFFICIENT_FUNDS" in response_upper:
             return {"Response": "INSUFFICIENT_FUNDS", "Gateway": "Shopify", "Price": "0.00"}
-        elif "INCORRECT_CVC" in response_text.upper():
+        elif "INCORRECT_CVC" in response_upper:
             return {"Response": "INCORRECT_CVC", "Gateway": "Shopify", "Price": "0.00"}
         else:
-            return {"Response": response_text[:200], "Gateway": "Unknown", "Price": "0.00"}
+            return {"Response": cleaned_response[:200] if cleaned_response else "Unknown response", "Gateway": "Unknown", "Price": "0.00"}
 
     async def check_card(self, site_url: str, card_details: str) -> Dict[str, Any]:
-        """Check card with improved error handling and debugging"""
+        """Check card with extended timeout for slow API"""
         try:
             session = await self.get_session()
             
@@ -452,15 +500,16 @@ class APIService:
             
             logger.info(f"Making request to: {url}")
             
-            # Make the request with proper parameters
+            # Make the request with proper parameters and extended timeout
             response = await session.get(
                 CHECKER_API_URL,
                 params={"site": site_url, "cc": card_details}
             )
             
             logger.info(f"Response status: {response.status_code}")
-            logger.info(f"Response headers: {dict(response.headers)}")
-            logger.info(f"Response text (first 500 chars): {response.text[:500]}")
+            logger.info(f"Response text length: {len(response.text)}")
+            logger.info(f"Response preview: {response.text[:200]}...")
+            logger.info(f"Response ending: ...{response.text[-200:]}")
             
             if response.status_code == 200:
                 return self.parse_checker_response(response.text)
@@ -476,9 +525,9 @@ class APIService:
                 }
                 
         except httpx.TimeoutException:
-            logger.error(f"Timeout checking card: {card_details[:6]}***")
+            logger.error(f"Timeout checking card: {card_details[:6]}*** - API took longer than 120 seconds")
             return {
-                "Response": "Request timeout - API took too long to respond",
+                "Response": "API timeout - server response took too long",
                 "Gateway": "N/A", 
                 "Price": "0.00"
             }
@@ -505,7 +554,7 @@ class APIService:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 👑 PREMIUM BOT CLASS - UPDATED
+# 👑 PREMIUM BOT CLASS - UPDATED WITH BETTER STATUS HANDLING
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class PremiumBot:
@@ -533,18 +582,19 @@ class PremiumBot:
                             membership: MembershipLevel, text: str, duration: float = 2.0):
         """Animate spinner for duration"""
         spinner_chars = self.ui.SPINNERS[membership]
-        steps = int(duration / 0.3)
+        steps = int(duration / 0.5)  # Update every 0.5 seconds for longer operations
         
         for i in range(steps):
             try:
                 char = spinner_chars[i % len(spinner_chars)]
+                elapsed = i * 0.5
                 await context.bot.edit_message_text(
                     chat_id=message.chat_id,
                     message_id=message.message_id,
-                    text=f"{text} {char}",
+                    text=f"{text} {char} <i>({elapsed:.1f}s)</i>",
                     parse_mode=ParseMode.HTML
                 )
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.5)
             except Exception:
                 break
 
@@ -612,7 +662,7 @@ Welcome back, <b>{html.escape(profile.username)}</b> {profile.membership_emoji}
             )
 
     async def check_single_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Premium single card check with improved API handling"""
+        """Premium single card check with extended timeout handling"""
         user = update.effective_user
         profile = self.data_manager.get_user(user.id, user.username or user.first_name)
 
@@ -646,22 +696,29 @@ Welcome back, <b>{html.escape(profile.username)}</b> {profile.membership_emoji}
 
         start_time = time.time()
         
-        # Animate spinner while processing
+        # Start the API check immediately and animate while waiting
+        api_task = asyncio.create_task(
+            self.api_service.check_card(profile.current_site, card_details)
+        )
+        bin_task = asyncio.create_task(
+            self.api_service.get_bin_details(card_details.split('|')[0][:6])
+        )
+        
+        # Animate spinner while waiting for API (with extended duration)
         animation_task = asyncio.create_task(
             self.animate_spinner(
                 context, spinner_msg, profile.membership,
                 f"🔍 Processing <code>{html.escape(card_details[:6])}***</code>",
-                profile.processing_delay + 2.0
+                120.0  # Up to 2 minutes of animation
             )
         )
 
         # Add membership-based delay
         await asyncio.sleep(profile.processing_delay)
 
-        # Get BIN info and check card
         try:
-            bin_info = await self.api_service.get_bin_details(card_details.split('|')[0][:6])
-            api_result = await self.api_service.check_card(profile.current_site, card_details)
+            # Wait for both API calls to complete
+            api_result, bin_info = await asyncio.gather(api_task, bin_task)
         except Exception as e:
             logger.exception(f"Error during check for user {user.id}")
             api_result = {
@@ -679,13 +736,16 @@ Welcome back, <b>{html.escape(profile.username)}</b> {profile.membership_emoji}
 
         # Determine status based on response
         response_text = api_result.get("Response", "Unknown")
-        if "CARD_DECLINED" in response_text.upper():
+        gateway = api_result.get("Gateway", "Unknown")
+        price = api_result.get("Price", "0.00")
+        
+        if response_text == "CARD_DECLINED":
             status = "DECLINED"
             profile.failed_checks += 1
-        elif any(keyword in response_text.upper() for keyword in ["THANK YOU", "ORDER_PLACED", "SUCCESS"]):
-            status = "APPROVED"
+        elif any(keyword in response_text.upper() for keyword in ["ORDER_PLACED", "THANK YOU", "SUCCESS"]):
+            status = "CHARGED"  # Changed from APPROVED to CHARGED for successful payments
             profile.successful_checks += 1
-        elif any(keyword in response_text.upper() for keyword in ["INSUFFICIENT_FUNDS", "INCORRECT_CVC"]):
+        elif any(keyword in response_text.upper() for keyword in ["INSUFFICIENT_FUNDS", "INCORRECT_CVC", "EXPIRED"]):
             status = "DECLINED"
             profile.failed_checks += 1
         else:
@@ -705,7 +765,9 @@ Welcome back, <b>{html.escape(profile.username)}</b> {profile.membership_emoji}
             timestamp=datetime.now(),
             user_id=user.id,
             processing_time=processing_time,
-            bin_info=bin_info
+            bin_info=bin_info,
+            gateway=gateway,
+            price=price
         )
 
         self.data_manager.add_check_result(result)
@@ -1037,12 +1099,13 @@ def main():
     print(f"""
 ╔═══════════════════════════════════════════════════════════╗
 ║               PREMIUM SHOPIFY CHECKER v2.0                ║
-║                     Starting Up...                        ║
+║                  EXTENDED TIMEOUT VERSION                 ║
 ╚═══════════════════════════════════════════════════════════╝
 
 🚀 Initializing premium systems...
 💎 Loading user profiles...
 🔐 Setting up admin controls...
+⏱️ Extended timeout for slow APIs...
 ⚡ Ready for premium experience!
 """)
 
@@ -1064,7 +1127,7 @@ def main():
     # Callback handler
     application.add_handler(CallbackQueryHandler(bot.callback_handler))
 
-    logger.info("🚀 Premium Bot is now running!")
+    logger.info("🚀 Premium Bot is now running with extended timeout!")
     
     try:
         application.run_polling()
