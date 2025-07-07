@@ -43,7 +43,7 @@ CHECKER_API_URL = "https://sigmabro766-1.onrender.com"
 BINLIST_API_URL = "https://lookup.binlist.net/"
 
 # Admin configuration (Add your Telegram user IDs here)
-ADMIN_IDS = [123456789, 987654321]  # Replace with actual admin Telegram IDs
+ADMIN_IDS = [7675426356, 987654321]  # Replace with actual admin Telegram IDs
 
 # Premium headers
 COMMON_HTTP_HEADERS = {
