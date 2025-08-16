@@ -45,7 +45,6 @@ def prepare_workspace():
 
 def install_requirements():
     print("Installing CPU-only DeepFaceLab requirements with --break-system-packages...")
-    run([sys.executable, "-m", "pip", "install", "--break-system-packages", "--upgrade", "pip"])
     run([sys.executable, "-m", "pip", "install", "--break-system-packages",
          "tensorflow-cpu==2.12.0", "opencv-python==4.7.0.72",
          "ffmpeg-python", "dlib", "h5py", "numpy==1.23.5", "tqdm",
@@ -55,7 +54,7 @@ def setup_deepfacelab():
     if not DFL_DIR.exists():
         print("Downloading DeepFaceLab CPU version...")
         zip_path = Path("DeepFaceLab_CPU.zip")
-        dfl_url = "https://github.com/iperov/DeepFaceLab/releases/download/v2.0.0/DeepFaceLab_Linux_CPU.zip"  # example
+        dfl_url = "https://github.com/iperov/DeepFaceLab/releases/download/v2.0.0/DeepFaceLab_Linux_CPU.zip"
         download_file(dfl_url, zip_path)
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(DFL_DIR)
