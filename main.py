@@ -35,21 +35,18 @@ def download_file(url, dest):
     print("Download complete.")
 
 def prepare_workspace():
-    # Create directories
     SRC_DIR.mkdir(parents=True, exist_ok=True)
     DST_DIR.mkdir(parents=True, exist_ok=True)
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Copy images
     shutil.copy(SRC_IMG, SRC_DIR / SRC_IMG.name)
     shutil.copy(DST_IMG, DST_DIR / DST_IMG.name)
     print("Workspace ready.")
 
 def install_requirements():
-    print("Installing CPU-only DeepFaceLab requirements...")
-    run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
-    run([sys.executable, "-m", "pip", "install",
+    print("Installing CPU-only DeepFaceLab requirements with --break-system-packages...")
+    run([sys.executable, "-m", "pip", "install", "--break-system-packages", "--upgrade", "pip"])
+    run([sys.executable, "-m", "pip", "install", "--break-system-packages",
          "tensorflow-cpu==2.12.0", "opencv-python==4.7.0.72",
          "ffmpeg-python", "dlib", "h5py", "numpy==1.23.5", "tqdm",
          "scikit-image", "imutils"])
@@ -58,7 +55,7 @@ def setup_deepfacelab():
     if not DFL_DIR.exists():
         print("Downloading DeepFaceLab CPU version...")
         zip_path = Path("DeepFaceLab_CPU.zip")
-        dfl_url = "https://github.com/iperov/DeepFaceLab/releases/download/v2.0.0/DeepFaceLab_Linux_CPU.zip"  # example link
+        dfl_url = "https://github.com/iperov/DeepFaceLab/releases/download/v2.0.0/DeepFaceLab_Linux_CPU.zip"  # example
         download_file(dfl_url, zip_path)
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(DFL_DIR)
