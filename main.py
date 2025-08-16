@@ -46,9 +46,15 @@ def prepare_workspace():
 def install_requirements():
     print("Installing CPU-only DeepFaceLab requirements with --break-system-packages...")
     run([sys.executable, "-m", "pip", "install", "--break-system-packages",
-         "tensorflow-cpu==2.12.0", "opencv-python==4.7.0.72",
-         "ffmpeg-python", "dlib", "h5py", "numpy==1.23.5", "tqdm",
-         "scikit-image", "imutils"])
+         "tensorflow-cpu==2.19.0",  # compatible with Python 3.12
+         "opencv-python==4.7.0.72",
+         "ffmpeg-python",
+         "dlib",
+         "h5py",
+         "numpy==1.23.5",
+         "tqdm",
+         "scikit-image",
+         "imutils"])
 
 def setup_deepfacelab():
     if not DFL_DIR.exists():
