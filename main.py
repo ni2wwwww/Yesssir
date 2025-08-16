@@ -1,122 +1,106 @@
 import os
-import urllib.request
+import subprocess
+import sys
 from pathlib import Path
-import torch
-from PIL import Image
-import cv2
-from facenet_pytorch import MTCNN
-import face_alignment
-import numpy as np
+import shutil
+import urllib.request
+import zipfile
 
 # -----------------------
 # CONFIG
 # -----------------------
-SOURCE_IMG = "source_face.jpg"
-TARGET_IMG = "target_face.jpg"
-OUTPUT_PATH = "output/result.jpg"
-CHECKPOINTS_DIR = Path("checkpoints")
-CHECKPOINTS_DIR.mkdir(exist_ok=True)
-
-# URLs for required models (replace with actual working URLs if needed)
-ARC_FACE_URL = "https://drive.google.com/uc?export=download&id=1H2a4v5g9v9v9v9v9v9v9v9v9v9v9v9v"  # ArcFace
-SIMSWAP_GEN_URL = "https://drive.google.com/uc?export=download&id=1H2a4v5g9v9v9v9v9v9v9v9v9v9v9v"  # SimSwap generator
-
-ARC_FACE_PATH = CHECKPOINTS_DIR / "arcface_checkpoint.tar"
-SIMSWAP_GEN_PATH = CHECKPOINTS_DIR / "insightface_model.pth"
+DFL_DIR = Path("DeepFaceLab")            # DeepFaceLab folder
+SRC_IMG = Path("source_face.jpg")        # Your source face
+DST_IMG = Path("target_face.jpg")        # Your target face
+WORKSPACE_DIR = DFL_DIR / "workspace"
+SRC_DIR = WORKSPACE_DIR / "data_src"
+DST_DIR = WORKSPACE_DIR / "data_dst"
+RESULT_DIR = WORKSPACE_DIR / "result"
+MODEL_DIR = WORKSPACE_DIR / "model"
+PRETRAIN_URL = "https://github.com/iperov/DeepFaceLab/releases/download/v2.0.0/Original_CPU.pth"  # Lightweight CPU model
 
 # -----------------------
-# Helper functions
+# HELPER FUNCTIONS
 # -----------------------
-def download_file(url, dest_path):
-    if not dest_path.exists():
-        print(f"Downloading {url} → {dest_path}")
-        urllib.request.urlretrieve(url, dest_path)
+def run(cmd):
+    print(f"Running: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
+
+def download_file(url, dest):
+    if dest.exists():
+        print(f"{dest} already exists, skipping download.")
+        return
+    print(f"Downloading {url} to {dest} ...")
+    urllib.request.urlretrieve(url, dest)
+    print("Download complete.")
+
+def prepare_workspace():
+    # Create directories
+    SRC_DIR.mkdir(parents=True, exist_ok=True)
+    DST_DIR.mkdir(parents=True, exist_ok=True)
+    RESULT_DIR.mkdir(parents=True, exist_ok=True)
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Copy images
+    shutil.copy(SRC_IMG, SRC_DIR / SRC_IMG.name)
+    shutil.copy(DST_IMG, DST_DIR / DST_IMG.name)
+    print("Workspace ready.")
+
+def install_requirements():
+    print("Installing CPU-only DeepFaceLab requirements...")
+    run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
+    run([sys.executable, "-m", "pip", "install",
+         "tensorflow-cpu==2.12.0", "opencv-python==4.7.0.72",
+         "ffmpeg-python", "dlib", "h5py", "numpy==1.23.5", "tqdm",
+         "scikit-image", "imutils"])
+
+def setup_deepfacelab():
+    if not DFL_DIR.exists():
+        print("Downloading DeepFaceLab CPU version...")
+        zip_path = Path("DeepFaceLab_CPU.zip")
+        dfl_url = "https://github.com/iperov/DeepFaceLab/releases/download/v2.0.0/DeepFaceLab_Linux_CPU.zip"  # example link
+        download_file(dfl_url, zip_path)
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(DFL_DIR)
+        zip_path.unlink()
+        print("DeepFaceLab extracted.")
     else:
-        print(f"Model already exists: {dest_path}")
+        print("DeepFaceLab folder exists, skipping download.")
 
-def setup_models():
-    download_file(ARC_FACE_URL, ARC_FACE_PATH)
-    download_file(SIMSWAP_GEN_URL, SIMSWAP_GEN_PATH)
-
-# -----------------------
-# Initialize models
-# -----------------------
-device_str = "cpu"  # Force CPU
-mtcnn = MTCNN(keep_all=True, device=device_str)
-fa = face_alignment.FaceAlignment(face_alignment.LandmarksType.TWO_D, device=device_str)
+def download_pretrained_model():
+    dest = MODEL_DIR / "Original_CPU.pth"
+    download_file(PRETRAIN_URL, dest)
 
 # -----------------------
-# Face extraction & landmarks
+# DEEPFACELAB STEPS
 # -----------------------
-def extract_face(image, margin=30):
-    boxes, _ = mtcnn.detect(image)
-    if boxes is None:
-        return None
-    x1, y1, x2, y2 = [int(b) for b in boxes[0]]
-    w, h = x2 - x1, y2 - y1
-    face = image.crop((x1 - margin, y1 - margin, x2 + margin, y2 + margin))
-    return face
+def extract_faces():
+    print("Extracting faces from source and target...")
+    run([sys.executable, str(DFL_DIR / "main.py"), "extract",
+         "--input-dir", str(SRC_DIR),
+         "--output-dir", str(SRC_DIR / "aligned"),
+         "--detector", "s3fd"])
+    run([sys.executable, str(DFL_DIR / "main.py"), "extract",
+         "--input-dir", str(DST_DIR),
+         "--output-dir", str(DST_DIR / "aligned"),
+         "--detector", "s3fd"])
 
-def get_landmarks(image):
-    pts = fa.get_landmarks(np.array(image))
-    if pts is None:
-        return None
-    return pts[0]
-
-def create_mask(landmarks, shape):
-    hull = cv2.convexHull(np.array(landmarks).astype(np.int32))
-    mask = np.zeros(shape[:2], dtype=np.uint8)
-    cv2.fillConvexPoly(mask, hull, 255)
-    return mask
-
-def warp_face(src_face, dst_face, src_points, dst_points):
-    transform = cv2.estimateAffinePartial2D(src_points, dst_points, method=cv2.LMEDS)[0]
-    warped_face = cv2.warpAffine(np.array(src_face), transform, (dst_face.width, dst_face.height))
-    return warped_face
-
-def blend_faces(warped_face, dst_face, mask):
-    blended = cv2.seamlessClone(
-        warped_face.astype(np.uint8),
-        np.array(dst_face),
-        mask,
-        (dst_face.width//2, dst_face.height//2),
-        cv2.NORMAL_CLONE
-    )
-    return blended
+def merge_face():
+    print("Merging swapped face onto target using pre-trained CPU model...")
+    run([sys.executable, str(DFL_DIR / "main.py"), "merge",
+         "--input-dir", str(DST_DIR),
+         "--output-dir", str(RESULT_DIR),
+         "--model-dir", str(MODEL_DIR)])
 
 # -----------------------
-# Main swap
-# -----------------------
-def face_swap(source_path, target_path, output_path):
-    src_img = Image.open(source_path).convert("RGB")
-    tgt_img = Image.open(target_path).convert("RGB")
-
-    src_face = extract_face(src_img)
-    tgt_face = extract_face(tgt_img)
-
-    if src_face is None or tgt_face is None:
-        print("Face detection failed!")
-        return
-
-    src_points = get_landmarks(src_face)
-    tgt_points = get_landmarks(tgt_face)
-    if src_points is None or tgt_points is None:
-        print("Landmarks detection failed!")
-        return
-
-    mask = create_mask(tgt_points, np.array(tgt_face).shape)
-    warped = warp_face(src_face, tgt_face, src_points, tgt_points)
-    blended = blend_faces(warped, tgt_face, mask)
-
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    cv2.imwrite(output_path, cv2.cvtColor(blended, cv2.COLOR_RGB2BGR))
-    print(f"Face swap complete! Saved at {output_path}")
-
-# -----------------------
-# Run
+# MAIN
 # -----------------------
 if __name__ == "__main__":
-    print("Setting up models...")
-    setup_models()
-    print("Performing face swap...")
-    face_swap(SOURCE_IMG, TARGET_IMG, OUTPUT_PATH)
+    print("=== DeepFaceLab CPU Fully Automated Pipeline ===")
+    install_requirements()
+    setup_deepfacelab()
+    prepare_workspace()
+    download_pretrained_model()
+    extract_faces()
+    merge_face()
+    print(f"✅ Face swap complete! Check {RESULT_DIR} for results.")
