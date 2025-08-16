@@ -74,10 +74,12 @@ def warp_region(src_face, dst_face, src_points, dst_points):
     return warped
 
 def seamless_clone(src_img, dst_img, mask):
-    """Feathered seamless clone blending"""
+    """Safe seamless clone: resize src and mask to target size"""
     mask_resized = cv2.resize(mask, (dst_img.width, dst_img.height))
+    src_resized = cv2.resize(np.array(src_img), (dst_img.width, dst_img.height))
     center = (dst_img.width//2, dst_img.height//2)
-    blended = cv2.seamlessClone(np.array(src_img).astype(np.uint8),
+    
+    blended = cv2.seamlessClone(src_resized.astype(np.uint8),
                                 np.array(dst_img).astype(np.uint8),
                                 mask_resized,
                                 center,
@@ -135,7 +137,7 @@ def face_swap(source_path, target_path, output_path):
     # Color match warped face to target
     warped_colored = color_transfer(Image.fromarray(warped_face), dst_face, combined_mask)
 
-    # Seamless cloning
+    # Seamless cloning safely
     output = seamless_clone(warped_colored, dst_img, combined_mask)
 
     # Optional sharpening for realism
