@@ -1,5 +1,4 @@
 import os
-import sys
 import urllib.request
 from pathlib import Path
 import torch
@@ -18,7 +17,7 @@ OUTPUT_PATH = "output/result.jpg"
 CHECKPOINTS_DIR = Path("checkpoints")
 CHECKPOINTS_DIR.mkdir(exist_ok=True)
 
-# URLs for required models
+# URLs for required models (replace with actual working URLs if needed)
 ARC_FACE_URL = "https://drive.google.com/uc?export=download&id=1H2a4v5g9v9v9v9v9v9v9v9v9v9v9v9v"  # ArcFace
 SIMSWAP_GEN_URL = "https://drive.google.com/uc?export=download&id=1H2a4v5g9v9v9v9v9v9v9v9v9v9v9v"  # SimSwap generator
 
@@ -40,19 +39,14 @@ def setup_models():
     download_file(SIMSWAP_GEN_URL, SIMSWAP_GEN_PATH)
 
 # -----------------------
-# CPU device
-# -----------------------
-device = torch.device("cpu")
-
-# -----------------------
 # Initialize models
 # -----------------------
-print("Initializing MTCNN and FaceAlignment...")
-mtcnn = MTCNN(keep_all=True, device=device)
-fa = face_alignment.FaceAlignment(face_alignment.LandmarksType.TWO_D, device=device)
+device_str = "cpu"  # Force CPU
+mtcnn = MTCNN(keep_all=True, device=device_str)
+fa = face_alignment.FaceAlignment(face_alignment.LandmarksType.TWO_D, device=device_str)
 
 # -----------------------
-# Face extraction
+# Face extraction & landmarks
 # -----------------------
 def extract_face(image, margin=30):
     boxes, _ = mtcnn.detect(image)
