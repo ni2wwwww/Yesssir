@@ -1,94 +1,95 @@
-import cv2
-import numpy as np
+import cv2  
+import dlib  
+import numpy as np  
+import torch  
+from facenet_pytorch import MTCNN, InceptionResnetV1  
+from PIL import Image  
+import face_alignment  
+from torchvision import transforms  
+import os  
 
-# -----------------------
-# CONFIG
-# -----------------------
-SOURCE_IMG = "source_face.jpg"
-TARGET_IMG = "target_face.jpg"
-OUTPUT_PATH = "advanced_swap_no_model.jpg"
+# ====== INIT MODELS (LOAD ONCE, SWAP FOREVER) ======  
+mtcnn = MTCNN(keep_all=True, device='cuda' if torch.cuda.is_available() else 'cpu')  
+predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")  
+fa = face_alignment.FaceAlignment(face_alignment.LandmarksType.TWO_D, device='cuda' if torch.cuda.is_available() else 'cpu')  
+resnet = InceptionResnetV1(pretrained='vggface2').eval()  
 
-# -----------------------
-# Load images
-# -----------------------
-source = cv2.imread(SOURCE_IMG)
-target = cv2.imread(TARGET_IMG)
+# ====== CORE FUNCTIONS ======  
+def extract_face(image, margin=30):  
+    boxes, _ = mtcnn.detect(image)  
+    if boxes is None:  
+        return None  
+    x, y, w, h = [int(b) for b in boxes[0]]  
+    face = image.crop((x - margin, y - margin, x + w + margin, y + h + margin))  
+    return face  
 
-# Convert to RGB
-source_rgb = cv2.cvtColor(source, cv2.COLOR_BGR2RGB)
-target_rgb = cv2.cvtColor(target, cv2.COLOR_BGR2RGB)
+def get_landmarks(face):  
+    return fa.get_landmarks(np.array(face))[0]  
 
-# -----------------------
-# Face detection using Haar cascades
-# -----------------------
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+def warp_face(src_face, dst_face):  
+    src_points = get_landmarks(src_face)  
+    dst_points = get_landmarks(dst_face)  
+    transform = cv2.estimateAffinePartial2D(src_points, dst_points, method=cv2.LMEDS)[0]  
+    warped_face = cv2.warpAffine(np.array(src_face), transform, (dst_face.width, dst_face.height))  
+    return warped_face  
 
-def get_face_box(img):
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-    if len(faces) == 0:
-        raise ValueError("No face detected!")
-    x, y, w, h = faces[0]
-    return x, y, w, h
+def create_mask(face):  
+    landmarks = get_landmarks(face)  
+    hull = cv2.convexHull(np.array(landmarks).astype(np.int32))  
+    mask = np.zeros((face.height, face.width), dtype=np.uint8)  
+    cv2.fillConvexPoly(mask, hull, 255)  
+    return mask  
 
-sx, sy, sw, sh = get_face_box(source_rgb)
-tx, ty, tw, th = get_face_box(target_rgb)
+def blend_faces(warped_face, dst_face, mask):  
+    r_mean, g_mean, b_mean = cv2.mean(np.array(dst_face), mask=mask)[:3]  
+    warped_face = warped_face.astype(np.float32)  
+    warped_face[:,:,0] += (r_mean - np.mean(warped_face[:,:,0]))  
+    warped_face[:,:,1] += (g_mean - np.mean(warped_face[:,:,1]))  
+    warped_face[:,:,2] += (b_mean - np.mean(warped_face[:,:,2]))  
+    blended = cv2.seamlessClone(  
+        warped_face.astype(np.uint8),  
+        np.array(dst_face),  
+        mask,  
+        (dst_face.width//2, dst_face.height//2),  
+        cv2.NORMAL_CLONE  
+    )  
+    return blended  
 
-# -----------------------
-# Extract face and rough hair region
-# -----------------------
-source_face = source_rgb[sy:sy+sh, sx:sx+sw]
+def transfer_hair_and_lighting(src_img, dst_img, blended_face):  
+    mask = np.zeros(src_img.shape[:2], np.uint8)  
+    bgdModel = np.zeros((1,65), np.float64)  
+    fgdModel = np.zeros((1,65), np.float64)  
+    rect = (50,50,src_img.shape[1]-100,src_img.shape[0]-100)  
+    cv2.grabCut(src_img, mask, rect, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_RECT)  
+    hair_mask = np.where((mask==2)|(mask==0),0,1).astype('uint8')  
+    hair = src_img * hair_mask[:,:,np.newaxis]  
+    final = cv2.addWeighted(blended_face, 0.85, hair, 0.15, 0)  
+    return final  
 
-# Rough hair region: top 40% of the face box
-hair_region = source_face[0:int(0.4*sh), :, :]
+# ====== MAIN FUNCTION ======  
+def face_swap(src_img_path, dst_img_path, output_path):  
+    src_img = Image.open(src_img_path).convert("RGB")  
+    dst_img = Image.open(dst_img_path).convert("RGB")  
 
-# Resize face and hair to target face
-source_face_resized = cv2.resize(source_face, (tw, th))
-hair_resized = cv2.resize(hair_region, (tw, int(0.4*th)))
+    src_face = extract_face(src_img)  
+    dst_face = extract_face(dst_img)  
 
-# -----------------------
-# Create mask for blending face + hair
-# -----------------------
-mask = np.zeros(source_face_resized.shape, dtype=np.uint8)
-mask[:, :, :] = 255
+    if src_face is None or dst_face is None:  
+        print("NO FACES DETECTED! ABORTING.")  
+        return  
 
-# Optionally add a soft feather for hair blending
-kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15,15))
-mask = cv2.erode(mask, kernel)
+    warped_face = warp_face(src_face, dst_face)  
+    mask = create_mask(dst_face)  
+    blended = blend_faces(warped_face, dst_face, mask)  
 
-# -----------------------
-# Color correction (match skin tone roughly)
-# -----------------------
-def color_correct(source_face, target_face):
-    source_lab = cv2.cvtColor(source_face, cv2.COLOR_RGB2LAB).astype(np.float32)
-    target_lab = cv2.cvtColor(target_face, cv2.COLOR_RGB2LAB).astype(np.float32)
-    for i in range(3):
-        s_mean, s_std = source_lab[:,:,i].mean(), source_lab[:,:,i].std()
-        t_mean, t_std = target_lab[:,:,i].mean(), target_lab[:,:,i].std()
-        source_lab[:,:,i] = ((source_lab[:,:,i]-s_mean)*(t_std/(s_std+1e-6))) + t_mean
-    return cv2.cvtColor(np.clip(source_lab,0,255).astype(np.uint8), cv2.COLOR_LAB2RGB)
+    final = transfer_hair_and_lighting(np.array(src_img), np.array(dst_img), blended)  
+    cv2.imwrite(output_path, cv2.cvtColor(final, cv2.COLOR_RGB2BGR))  
 
-source_face_colored = color_correct(source_face_resized, target_rgb[ty:ty+th, tx:tx+tw])
-
-# -----------------------
-# Paste hair roughly onto target
-# -----------------------
-target_hair_region = target_rgb[ty:ty+int(0.4*th), tx:tx+tw]
-hair_colored = color_correct(hair_resized, target_hair_region)
-target_rgb[ty:ty+int(0.4*th), tx:tx+tw] = cv2.addWeighted(target_hair_region, 0.5, hair_colored, 0.5, 0)
-
-# -----------------------
-# Seamless cloning for face
-# -----------------------
-center = (tx + tw//2, ty + th//2)
-output = cv2.seamlessClone(cv2.cvtColor(source_face_colored, cv2.COLOR_RGB2BGR),
-                           target,
-                           mask,
-                           center,
-                           cv2.NORMAL_CLONE)
-
-# -----------------------
-# Save output
-# -----------------------
-cv2.imwrite(OUTPUT_PATH, output)
-print(f"Advanced face + hair swap completed! Saved as {OUTPUT_PATH}")
+# ====== EXAMPLE USAGE ======  
+if __name__ == "__main__":  
+    face_swap(  
+        src_img_path="source_face.jpg",  
+        dst_img_path="target_face.jpg",  
+        output_path="output_swap.jpg"  
+    )  
+    print("FACE SWAP COMPLETE. ENJOY YOUR WARCRIME.")  
